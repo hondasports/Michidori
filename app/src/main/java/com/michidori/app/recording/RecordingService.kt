@@ -729,15 +729,20 @@ class RecordingService : LifecycleService() {
             .setVideoMimeType(mimeType)
             .setQualitySelector(qualitySelector)
             .build()
-        val capture = VideoCapture.Builder(recorder)
+        val captureBuilder = VideoCapture.Builder(recorder)
             .setTargetFrameRate(Range(appliedQuality.targetFps, appliedQuality.targetFps))
-            .build()
-        val preview = Preview.Builder().build()
+        val physicalCameraId = selector.physicalCameraId
+        physicalCameraId?.let { Camera2Interop.Extender(captureBuilder).setPhysicalCameraId(it) }
+        val capture = captureBuilder.build()
+        val previewBuilder = Preview.Builder()
+        physicalCameraId?.let { Camera2Interop.Extender(previewBuilder).setPhysicalCameraId(it) }
+        val preview = previewBuilder.build()
         provider.unbindAll()
-        val analysis = ImageAnalysis.Builder()
+        val analysisBuilder = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
-            .build()
+        physicalCameraId?.let { Camera2Interop.Extender(analysisBuilder).setPhysicalCameraId(it) }
+        val analysis = analysisBuilder.build()
         analysis.setAnalyzer(visionAnalyzer.analysisExecutor, visionAnalyzer)
         var boundCamera: Camera
         var attachedAnalysis: ImageAnalysis?
