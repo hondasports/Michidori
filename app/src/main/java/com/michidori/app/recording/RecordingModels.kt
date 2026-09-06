@@ -29,6 +29,8 @@ data class DashcamEvent(
     val epochMs: Long,
     val severity: String = "NORMAL",
     val confidence: Float = 1f,
+    val source: String = "manual",
+    val details: String? = null,
 )
 
 data class RecordingUiState(

@@ -163,12 +163,14 @@ class DashcamEventStore(private val root: File) {
     fun append(event: DashcamEvent) {
         eventFile.appendText(
             listOf(
-                event.id,
-                event.type,
+                event.id.safeTsvField(),
+                event.type.safeTsvField(),
                 event.elapsedNs,
                 event.epochMs,
-                event.severity,
+                event.severity.safeTsvField(),
                 event.confidence,
+                event.source.safeTsvField(),
+                event.details.orEmpty().safeTsvField(),
             ).joinToString("\t") + "\n",
             StandardCharsets.UTF_8,
         )
@@ -180,7 +182,7 @@ class DashcamEventStore(private val root: File) {
         return eventFile.useLines(StandardCharsets.UTF_8) { lines ->
             lines.mapNotNull { line ->
                 val fields = line.split('\t')
-                if (fields.size != 6) return@mapNotNull null
+                if (fields.size != 6 && fields.size != 8) return@mapNotNull null
                 runCatching {
                     DashcamEvent(
                         id = fields[0],
@@ -189,9 +191,13 @@ class DashcamEventStore(private val root: File) {
                         epochMs = fields[3].toLong(),
                         severity = fields[4],
                         confidence = fields[5].toFloat(),
+                        source = fields.getOrNull(6)?.takeIf { it.isNotBlank() } ?: "manual",
+                        details = fields.getOrNull(7)?.takeIf { it.isNotBlank() },
                     )
                 }.getOrNull()
             }.toList()
         }
     }
+
+    private fun String.safeTsvField(): String = replace('\t', ' ').replace('\r', ' ').replace('\n', ' ')
 }

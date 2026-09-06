@@ -14,6 +14,9 @@ import android.location.LocationManager
 import android.os.Looper
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import com.michidori.app.events.MotionEventCandidate
+import com.michidori.app.events.MotionEventDetector
+import com.michidori.app.events.MotionSample
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,18 +25,21 @@ import kotlinx.coroutines.flow.asStateFlow
 class TelemetryCollector(
     context: Context,
     private val store: TelemetryStore,
+    private val onMotionEvent: (MotionEventCandidate) -> Unit = {},
 ) : SensorEventListener, LocationListener {
     private val appContext = context.applicationContext
     private val deviceStateCollector = DeviceStateCollector(appContext)
     private val sensorManager = appContext.getSystemService(SensorManager::class.java)
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val timestampNormalizer = MonotonicTimestampNormalizer()
+    private val motionEventDetector = MotionEventDetector()
     private val _uiState = MutableStateFlow(TelemetryUiState())
     private var running = false
     private var lastPersistedElapsedNs: Long? = null
     private var sampleCount = 0L
     private var lastLocation: Location? = null
     private var accelerometer: FloatArray? = null
+    private var accelerationSensorType: Int? = null
     private var gyroscope: FloatArray? = null
     private var rotation: FloatArray? = null
 
@@ -48,6 +54,11 @@ class TelemetryCollector(
         if (running) return
         running = true
         lastLocation = null
+        accelerometer = null
+        gyroscope = null
+        rotation = null
+        accelerationSensorType = null
+        motionEventDetector.reset()
         _uiState.value = _uiState.value.copy(gpsAvailable = false, speedKmh = null)
         deviceStateCollector.start()
         updateDeviceStateUi()
@@ -62,18 +73,48 @@ class TelemetryCollector(
         runCatching { locationManager?.removeUpdates(this) }
         deviceStateCollector.stop()
         lastLocation = null
-        _uiState.value = _uiState.value.copy(gpsAvailable = false, speedKmh = null)
+        accelerometer = null
+        gyroscope = null
+        rotation = null
+        accelerationSensorType = null
+        _uiState.value = _uiState.value.copy(
+            gpsAvailable = false,
+            speedKmh = null,
+            sensorsAvailable = false,
+        )
     }
 
     override fun onSensorChanged(event: SensorEvent) {
         if (!running) return
+        val elapsedNs = timestampNormalizer.normalize(event.timestamp)
         when (event.sensor.type) {
-            Sensor.TYPE_ACCELEROMETER -> accelerometer = event.values.copyOf(3)
+            Sensor.TYPE_LINEAR_ACCELERATION,
+            Sensor.TYPE_ACCELEROMETER,
+            -> {
+                accelerometer = event.values.copyOf(3)
+                accelerationSensorType = event.sensor.type
+            }
             Sensor.TYPE_GYROSCOPE -> gyroscope = event.values.copyOf(3)
             Sensor.TYPE_ROTATION_VECTOR -> rotation = event.values.copyOf(3)
             else -> return
         }
-        persistSample(event.timestamp)
+        val acceleration = accelerometer
+        motionEventDetector.onSample(
+            MotionSample(
+                elapsedNs = elapsedNs,
+                accelerationX = acceleration?.getOrNull(0),
+                accelerationY = acceleration?.getOrNull(1),
+                accelerationZ = acceleration?.getOrNull(2),
+                gyroscopeZ = gyroscope?.getOrNull(2),
+                source = if (accelerationSensorType == Sensor.TYPE_LINEAR_ACCELERATION) {
+                    "imu_linear"
+                } else {
+                    "imu_accelerometer"
+                },
+                isLinearAcceleration = accelerationSensorType == Sensor.TYPE_LINEAR_ACCELERATION,
+            ),
+        ).forEach(onMotionEvent)
+        persistSample(elapsedNs, alreadyNormalized = true)
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -86,7 +127,10 @@ class TelemetryCollector(
             speedKmh = location.speed.takeIf { location.hasSpeed() }?.times(MPS_TO_KMH),
         )
         updateDeviceStateUi()
-        persistSample(location.elapsedRealtimeNanos.takeIf { it > 0L } ?: SystemClock.elapsedRealtimeNanos(), location.time)
+        val elapsedNs = timestampNormalizer.normalize(
+            location.elapsedRealtimeNanos.takeIf { it > 0L } ?: SystemClock.elapsedRealtimeNanos(),
+        )
+        persistSample(elapsedNs, location.time, alreadyNormalized = true)
     }
 
     override fun onProviderDisabled(provider: String) {
@@ -99,7 +143,8 @@ class TelemetryCollector(
 
     private fun startSensors() {
         val sensors = listOfNotNull(
-            sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER),
+            sensorManager?.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
+                ?: sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER),
             sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE),
             sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR),
         )
@@ -136,17 +181,21 @@ class TelemetryCollector(
         }
     }
 
-    private fun persistSample(rawElapsedNs: Long, epochMs: Long = System.currentTimeMillis()) {
-        val elapsedNs = timestampNormalizer.normalize(rawElapsedNs)
+    private fun persistSample(
+        elapsedNs: Long,
+        epochMs: Long = System.currentTimeMillis(),
+        alreadyNormalized: Boolean = false,
+    ) {
+        val normalizedElapsedNs = if (alreadyNormalized) elapsedNs else timestampNormalizer.normalize(elapsedNs)
         val previous = lastPersistedElapsedNs
-        if (previous != null && elapsedNs - previous < MIN_SAMPLE_INTERVAL_NS) return
-        lastPersistedElapsedNs = elapsedNs
+        if (previous != null && normalizedElapsedNs - previous < MIN_SAMPLE_INTERVAL_NS) return
+        lastPersistedElapsedNs = normalizedElapsedNs
 
         val location = lastLocation
         val deviceState = deviceStateCollector.state.value
         store.append(
             TelemetrySample(
-                elapsedNs = elapsedNs,
+                elapsedNs = normalizedElapsedNs,
                 epochMs = epochMs,
                 latitude = location?.latitude,
                 longitude = location?.longitude,

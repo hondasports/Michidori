@@ -37,6 +37,7 @@ import android.hardware.camera2.CameraCharacteristics
 import com.google.common.util.concurrent.ListenableFuture
 import com.michidori.app.MainActivity
 import com.michidori.app.R
+import com.michidori.app.events.MotionEventCandidate
 import com.michidori.app.telemetry.TelemetryCollector
 import com.michidori.app.telemetry.TelemetryStore
 import kotlinx.coroutines.CancellationException
@@ -95,6 +96,7 @@ class RecordingService : LifecycleService() {
         telemetryCollector = TelemetryCollector(
             context = this,
             store = TelemetryStore(File(filesDir, TELEMETRY_DIRECTORY)),
+            onMotionEvent = ::onMotionEvent,
         )
         lifecycleScope.launch {
             telemetryCollector.uiState.collect { telemetry ->
@@ -233,6 +235,25 @@ class RecordingService : LifecycleService() {
         _uiState.update { it.copy(lastEventType = event.type) }
         refreshSegmentState()
         updateNotification()
+    }
+
+    private fun onMotionEvent(candidate: MotionEventCandidate) {
+        if (!sessionActive) return
+        val event = DashcamEvent(
+            id = UUID.randomUUID().toString(),
+            type = candidate.type.id,
+            elapsedNs = candidate.elapsedNs,
+            epochMs = System.currentTimeMillis(),
+            severity = candidate.severity,
+            confidence = candidate.confidence,
+            source = candidate.source,
+            details = candidate.details,
+        )
+        eventStore.append(event)
+        pendingSaveElapsedNs += candidate.elapsedNs
+        segmentStore.protectAround(candidate.elapsedNs, SAVE_WINDOW_NS)
+        _uiState.update { it.copy(lastEventType = event.type) }
+        refreshSegmentState()
     }
 
     private fun beginRecordingSession() {
