@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Michidori</string>
+    <string name="recording_channel_name">録画</string>
+    <string name="recording_notification_title">Michidori 録画中</string>
+    <string name="recording_notification_text">走行映像と telemetry を保存しています</string>
+</resources>

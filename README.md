@@ -82,6 +82,7 @@ Event              ★
 - [Product concept](docs/product.md)
 - [Architecture](docs/architecture.md)
 - [Development process](docs/development-process.md)
+- [MVP implementation](docs/mvp-implementation.md)
 - [Agent loop](.loop/README.md)
 - [Agent OS](.loop/AGENT_OS.md)
 
