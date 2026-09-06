@@ -4,6 +4,9 @@
     <uses-feature
         android:name="android.hardware.camera.any"
         android:required="true" />
+    <uses-feature
+        android:name="com.google.ar.core.depth"
+        android:required="false" />
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -22,6 +25,9 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Michidori"
         android:usesCleartextTraffic="false">
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

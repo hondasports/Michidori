@@ -304,25 +304,48 @@ private fun CameraPreview(
             },
             update = { service.attachPreview(it) },
         )
-        Row(
+        Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .padding(14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            StatusPill(
-                label = recordingLabel(state.status),
-                color = if (state.status == RecordingStatus.RECORDING) {
-                    MichidoriColors.recording
-                } else {
-                    MichidoriColors.textSecondary
-                },
-            )
-            StatusPill(
-                label = if (state.gpsAvailable) "GPS OK" else "GPS --",
-                color = if (state.gpsAvailable) MichidoriColors.gps else MichidoriColors.warning,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                StatusPill(
+                    label = recordingLabel(state.status),
+                    color = if (state.status == RecordingStatus.RECORDING) {
+                        MichidoriColors.recording
+                    } else {
+                        MichidoriColors.textSecondary
+                    },
+                )
+                StatusPill(
+                    label = if (state.gpsAvailable) "GPS OK" else "GPS --",
+                    color = if (state.gpsAvailable) MichidoriColors.gps else MichidoriColors.warning,
+                )
+            }
+            Spacer(Modifier.height(7.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatusPill(
+                    label = "AI ${state.vision.status.name}",
+                    color = if (state.vision.status == com.michidori.app.vision.VisionStatus.READY) {
+                        MichidoriColors.gps
+                    } else {
+                        MichidoriColors.warning
+                    },
+                )
+                StatusPill(
+                    label = "DEPTH ${state.depth.status.name}",
+                    color = if (state.depth.status == com.michidori.app.depth.DepthStatus.READY) {
+                        MichidoriColors.gps
+                    } else {
+                        MichidoriColors.warning
+                    },
+                )
+            }
         }
         Column(
             modifier = Modifier
@@ -389,6 +412,27 @@ private fun StatusSummary(state: RecordingUiState) {
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
         )
+        Text(
+            text = "AI ${state.vision.statusMessage} · objects ${state.vision.objectCount} · ${state.vision.lastInferenceMs?.let { "${it}ms" } ?: "--"}",
+            color = MichidoriColors.textMuted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+        )
+        Text(
+            text = "DEPTH ${state.depth.statusMessage} · ${state.depth.lastDistanceMeters?.let { String.format(Locale.US, "%.1fm", it) } ?: "--"} · LiteRT ${state.trafficModelStatus}",
+            color = MichidoriColors.textMuted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+        )
+        state.lastEventType?.let { eventType ->
+            Text(
+                text = "EVENT $eventType",
+                color = MichidoriColors.warning,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+            )
+        }
         Spacer(Modifier.height(10.dp))
     }
 }

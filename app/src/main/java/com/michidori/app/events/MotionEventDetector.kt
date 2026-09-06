@@ -9,6 +9,7 @@ enum class MotionEventType(val id: String) {
     HARD_ACCELERATION("HARD_ACCELERATION"),
     SHARP_TURN("SHARP_TURN"),
     IMPACT("IMPACT"),
+    FRONT_APPROACH("FRONT_APPROACH"),
 }
 
 data class MotionSample(

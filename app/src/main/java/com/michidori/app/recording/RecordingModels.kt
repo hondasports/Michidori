@@ -1,5 +1,8 @@
 package com.michidori.app.recording
 
+import com.michidori.app.depth.DepthUiState
+import com.michidori.app.vision.VisionUiState
+
 enum class RecordingStatus {
     IDLE,
     STARTING,
@@ -45,6 +48,10 @@ data class RecordingUiState(
     val lastEventType: String? = null,
     val lastError: String? = null,
     val capture: CaptureUiState = CaptureUiState(),
+    val vision: VisionUiState = VisionUiState(),
+    val depth: DepthUiState = DepthUiState(),
+    val trafficModelStatus: String = "MODEL_MISSING",
+    val trafficModelMessage: String = "LiteRT modelが未搭載",
 ) {
     val isRecording: Boolean
         get() = status == RecordingStatus.RECORDING || status == RecordingStatus.STOPPING

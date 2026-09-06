@@ -65,6 +65,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-video:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
+    implementation("com.google.mlkit:object-detection:17.0.2")
+    implementation("com.google.ai.edge.litert:litert:2.1.0")
+    implementation("com.google.ar:core:1.50.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

@@ -18,6 +18,7 @@ import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.DynamicRange
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
@@ -37,9 +38,22 @@ import android.hardware.camera2.CameraCharacteristics
 import com.google.common.util.concurrent.ListenableFuture
 import com.michidori.app.MainActivity
 import com.michidori.app.R
+import com.michidori.app.depth.ArCoreDepthProvider
+import com.michidori.app.depth.DepthSample
+import com.michidori.app.depth.DepthStatus
 import com.michidori.app.events.MotionEventCandidate
 import com.michidori.app.telemetry.TelemetryCollector
 import com.michidori.app.telemetry.TelemetryStore
+import com.michidori.app.vision.DetectedObjectObservation
+import com.michidori.app.vision.LiteRtTrafficModelRunner
+import com.michidori.app.vision.TtcEstimator
+import com.michidori.app.vision.TtcEstimate
+import com.michidori.app.vision.TtcObservation
+import com.michidori.app.vision.TrafficStore
+import com.michidori.app.vision.VisionAnalyzer
+import com.michidori.app.vision.VisionFrameResult
+import com.michidori.app.vision.VisionStatus
+import com.michidori.app.vision.VisionStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -52,6 +66,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.io.File
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -64,11 +79,20 @@ class RecordingService : LifecycleService() {
     private lateinit var eventStore: DashcamEventStore
     private lateinit var telemetryCollector: TelemetryCollector
     private lateinit var captureSettingsStore: CaptureSettingsStore
+    private lateinit var visionStore: VisionStore
+    private lateinit var depthStore: com.michidori.app.depth.DepthStore
+    private lateinit var ttcStore: com.michidori.app.vision.TtcStore
+    private lateinit var trafficStore: TrafficStore
+    private lateinit var visionAnalyzer: VisionAnalyzer
+    private lateinit var trafficModelRunner: LiteRtTrafficModelRunner
+    private lateinit var depthProvider: ArCoreDepthProvider
+    private val ttcEstimator = TtcEstimator()
 
     private var cameraProvider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var previewUseCase: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
+    private var imageAnalysis: ImageAnalysis? = null
     private var previewSurfaceProvider: Preview.SurfaceProvider? = null
     private var cameraInitializationJob: Job? = null
     private var rotationJob: Job? = null
@@ -83,6 +107,9 @@ class RecordingService : LifecycleService() {
     private var pendingStart = false
     private var continueSessionAfterRebind = false
     private var rebindForNextSegment = false
+    private var latestDepthSample: DepthSample? = null
+    private var lastFrontApproachElapsedNs: Long? = null
+    private var lastTrafficStatusElapsedNs: Long? = null
     private val pendingSaveElapsedNs = mutableListOf<Long>()
 
     val uiState: StateFlow<RecordingUiState> = _uiState.asStateFlow()
@@ -93,6 +120,30 @@ class RecordingService : LifecycleService() {
         segmentStore = SegmentStore(recordingsRoot)
         eventStore = DashcamEventStore(recordingsRoot)
         captureSettingsStore = CaptureSettingsStore(this)
+        visionStore = VisionStore(recordingsRoot)
+        depthStore = com.michidori.app.depth.DepthStore(recordingsRoot)
+        ttcStore = com.michidori.app.vision.TtcStore(recordingsRoot)
+        trafficStore = TrafficStore(recordingsRoot)
+        visionAnalyzer = VisionAnalyzer(
+            onResult = ::onVisionFrame,
+            onStatus = ::onVisionStatus,
+        )
+        trafficModelRunner = LiteRtTrafficModelRunner(this)
+        depthProvider = ArCoreDepthProvider(
+            context = this,
+            onSample = ::onDepthSample,
+            onStatus = ::onDepthStatus,
+        )
+        _uiState.update {
+            it.copy(
+                vision = it.vision.copy(
+                    status = if (visionAnalyzer.initiallyAvailable) VisionStatus.READY else VisionStatus.UNAVAILABLE,
+                    statusMessage = visionAnalyzer.initialStatusMessage,
+                ),
+                trafficModelStatus = trafficModelRunner.status.name,
+                trafficModelMessage = trafficModelRunner.statusMessage,
+            )
+        }
         telemetryCollector = TelemetryCollector(
             context = this,
             store = TelemetryStore(File(filesDir, TELEMETRY_DIRECTORY)),
@@ -256,13 +307,155 @@ class RecordingService : LifecycleService() {
         refreshSegmentState()
     }
 
+    private fun onVisionStatus(status: VisionStatus, message: String) {
+        _uiState.update {
+            it.copy(
+                vision = it.vision.copy(
+                    status = status,
+                    statusMessage = message,
+                ),
+            )
+        }
+    }
+
+    private fun onDepthStatus(status: DepthStatus, message: String) {
+        _uiState.update {
+            it.copy(
+                depth = it.depth.copy(
+                    status = status,
+                    statusMessage = message,
+                ),
+            )
+        }
+    }
+
+    private fun onDepthSample(sample: DepthSample) {
+        if (!sessionActive) return
+        latestDepthSample = sample
+        depthStore.append(sample)
+        _uiState.update {
+            it.copy(
+                depth = it.depth.copy(
+                    lastDistanceMeters = sample.distanceMeters,
+                    lastValid = sample.valid,
+                    lastConfidence = sample.confidence,
+                    lastElapsedNs = sample.elapsedNs,
+                ),
+            )
+        }
+    }
+
+    private fun onVisionFrame(frame: VisionFrameResult) {
+        if (!sessionActive) return
+        visionStore.append(frame)
+        _uiState.update {
+            it.copy(
+                vision = it.vision.copy(
+                    objectCount = frame.objects.size,
+                    lastInferenceMs = frame.inferenceMs,
+                    lastElapsedNs = frame.elapsedNs,
+                ),
+            )
+        }
+
+        val features = frame.objects.flatMap { objectValue ->
+            listOf(
+                objectValue.confidence,
+                normalizedCenterX(objectValue),
+                normalizedCenterY(objectValue),
+                normalizedArea(objectValue),
+            )
+        }.toFloatArray()
+        if (features.isNotEmpty()) {
+            val predictions = trafficModelRunner.infer(features, frame.elapsedNs)
+            _uiState.update {
+                it.copy(
+                    trafficModelStatus = trafficModelRunner.status.name,
+                    trafficModelMessage = trafficModelRunner.statusMessage,
+                )
+            }
+            val previousStatusNs = lastTrafficStatusElapsedNs
+            if (predictions.isNotEmpty() ||
+                previousStatusNs == null ||
+                frame.elapsedNs - previousStatusNs >= TRAFFIC_STATUS_LOG_INTERVAL_NS
+            ) {
+                trafficStore.append(
+                    elapsedNs = frame.elapsedNs,
+                    status = trafficModelRunner.status,
+                    statusMessage = trafficModelRunner.statusMessage,
+                    predictions = predictions,
+                )
+                lastTrafficStatusElapsedNs = frame.elapsedNs
+            }
+        }
+
+        frame.objects.forEach { objectValue ->
+            val depth = latestDepthSample?.takeIf { sample ->
+                sample.valid &&
+                    abs(frame.elapsedNs - sample.elapsedNs) <= DEPTH_ASSOCIATION_WINDOW_NS &&
+                    isNearFrameCenter(objectValue)
+            }
+            val estimate = ttcEstimator.estimate(
+                TtcObservation(
+                    trackingId = objectValue.trackingId,
+                    label = objectValue.label,
+                    objectConfidence = objectValue.confidence,
+                    elapsedNs = frame.elapsedNs,
+                    distanceMeters = depth?.distanceMeters,
+                    depthValid = depth?.valid == true,
+                    depthConfidence = depth?.confidence ?: 0f,
+                ),
+            )
+            ttcStore.append(estimate)
+            maybeRecordFrontApproach(estimate)
+        }
+    }
+
+    private fun maybeRecordFrontApproach(estimate: TtcEstimate) {
+        if (!estimate.valid || estimate.ttcSeconds == null || estimate.ttcSeconds > FRONT_APPROACH_TTC_SECONDS) return
+        val previous = lastFrontApproachElapsedNs
+        if (previous != null && estimate.elapsedNs - previous < FRONT_APPROACH_COOLDOWN_NS) return
+        lastFrontApproachElapsedNs = estimate.elapsedNs
+        onMotionEvent(
+            MotionEventCandidate(
+                type = com.michidori.app.events.MotionEventType.FRONT_APPROACH,
+                elapsedNs = estimate.elapsedNs,
+                severity = "MEDIUM",
+                confidence = estimate.confidence,
+                source = "vision_depth_ttc",
+                details = "FRONT_APPROACH ttcSeconds=${estimate.ttcSeconds} closingSpeedMps=${estimate.closingSpeedMps}",
+            ),
+        )
+    }
+
+    private fun normalizedCenterX(objectValue: DetectedObjectObservation): Float =
+        (((objectValue.left + objectValue.right) / 2f) / objectValue.frameWidth.coerceAtLeast(1)).coerceIn(0f, 1f)
+
+    private fun normalizedCenterY(objectValue: DetectedObjectObservation): Float =
+        (((objectValue.top + objectValue.bottom) / 2f) / objectValue.frameHeight.coerceAtLeast(1)).coerceIn(0f, 1f)
+
+    private fun normalizedArea(objectValue: DetectedObjectObservation): Float =
+        (((objectValue.right - objectValue.left).coerceAtLeast(0f) *
+            (objectValue.bottom - objectValue.top).coerceAtLeast(0f)) /
+            (objectValue.frameWidth.coerceAtLeast(1) * objectValue.frameHeight.coerceAtLeast(1))).coerceIn(0f, 1f)
+
+    private fun isNearFrameCenter(objectValue: DetectedObjectObservation): Boolean =
+        abs(normalizedCenterX(objectValue) - 0.5f) <= 0.35f &&
+            abs(normalizedCenterY(objectValue) - 0.5f) <= 0.4f
+
     private fun beginRecordingSession() {
         if (videoCapture == null || sessionActive) return
         sessionActive = true
         stopRequested = false
         sessionStartElapsedMs = SystemClock.elapsedRealtime()
         pendingSaveElapsedNs.clear()
+        latestDepthSample = null
+        lastFrontApproachElapsedNs = null
+        lastTrafficStatusElapsedNs = null
+        ttcEstimator.reset()
         telemetryCollector.start()
+        visionAnalyzer.setEnabled(true)
+        depthProvider.start()
         _uiState.update { it.copy(status = RecordingStatus.RECORDING, elapsedMs = 0L, lastError = null) }
         elapsedJob?.cancel()
         elapsedJob = lifecycleScope.launch {
@@ -400,6 +593,7 @@ class RecordingService : LifecycleService() {
                 camera = binding.camera
                 previewUseCase = binding.preview
                 videoCapture = binding.capture
+                imageAnalysis = binding.analysis
                 previewSurfaceProvider?.let(binding.preview::setSurfaceProvider)
                 _uiState.update {
                     it.copy(
@@ -504,12 +698,37 @@ class RecordingService : LifecycleService() {
             .build()
         val preview = Preview.Builder().build()
         provider.unbindAll()
-        val boundCamera = provider.bindToLifecycle(
-            this@RecordingService,
-            selector,
-            preview,
-            capture,
-        )
+        val analysis = ImageAnalysis.Builder()
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
+            .build()
+        analysis.setAnalyzer(visionAnalyzer.analysisExecutor, visionAnalyzer)
+        var boundCamera: Camera
+        var attachedAnalysis: ImageAnalysis?
+        var analysisFallbackReason: String?
+        try {
+            boundCamera = provider.bindToLifecycle(
+                this@RecordingService,
+                selector,
+                preview,
+                capture,
+                analysis,
+            )
+            attachedAnalysis = analysis
+            analysisFallbackReason = null
+        } catch (_: Exception) {
+            analysis.clearAnalyzer()
+            provider.unbindAll()
+            visionAnalyzer.reportExternalDegraded("ImageAnalysisが録画組み合わせに入らへん")
+            boundCamera = provider.bindToLifecycle(
+                this@RecordingService,
+                selector,
+                preview,
+                capture,
+            )
+            attachedAnalysis = null
+            analysisFallbackReason = "ImageAnalysis未接続（録画を優先）"
+        }
         val actualQuality = capture.selectedQuality
         val fallbackReasons = buildList {
             thermalReason?.let(::add)
@@ -522,6 +741,7 @@ class RecordingService : LifecycleService() {
             if (mimeType != CaptureQualityProfile.VIDEO_MIME_HEVC) {
                 add("H.265が未対応のためH.264へfallback")
             }
+            analysisFallbackReason?.let(::add)
             if (actualQuality != null && actualQuality != qualityForProfile(appliedQuality)) {
                 add("CameraXが $actualQuality を選択")
             }
@@ -530,6 +750,7 @@ class RecordingService : LifecycleService() {
             camera = boundCamera,
             preview = preview,
             capture = capture,
+            analysis = attachedAnalysis,
             selection = CaptureSelection(
                 requestedQuality = requestedQuality,
                 appliedQuality = appliedQuality,
@@ -612,6 +833,8 @@ class RecordingService : LifecycleService() {
 
     private fun rebindCamera(continueSession: Boolean = false) {
         continueSessionAfterRebind = continueSession
+        imageAnalysis?.clearAnalyzer()
+        imageAnalysis = null
         cameraProvider?.unbindAll()
         camera = null
         previewUseCase = null
@@ -624,6 +847,7 @@ class RecordingService : LifecycleService() {
         val camera: Camera,
         val preview: Preview,
         val capture: VideoCapture<Recorder>,
+        val analysis: ImageAnalysis?,
         val selection: CaptureSelection,
     )
 
@@ -636,6 +860,10 @@ class RecordingService : LifecycleService() {
         rotationJob?.cancel()
         elapsedJob?.cancel()
         telemetryCollector.stop()
+        visionAnalyzer.setEnabled(false)
+        depthProvider.stop()
+        ttcEstimator.reset()
+        latestDepthSample = null
         _uiState.update { it.copy(status = RecordingStatus.IDLE, elapsedMs = 0L) }
         refreshSegmentState()
         updateNotification()
@@ -644,10 +872,12 @@ class RecordingService : LifecycleService() {
     private fun releaseCamera() {
         cameraInitializationJob?.cancel()
         cameraProvider?.unbindAll()
+        imageAnalysis?.clearAnalyzer()
         cameraProvider = null
         camera = null
         previewUseCase = null
         videoCapture = null
+        imageAnalysis = null
         continueSessionAfterRebind = false
         rebindForNextSegment = false
         _uiState.update { it.copy(cameraReady = false) }
@@ -661,6 +891,10 @@ class RecordingService : LifecycleService() {
         rotationJob?.cancel()
         elapsedJob?.cancel()
         telemetryCollector.stop()
+        visionAnalyzer.setEnabled(false)
+        depthProvider.stop()
+        ttcEstimator.reset()
+        latestDepthSample = null
         _uiState.update { it.copy(status = RecordingStatus.ERROR, lastError = message) }
         updateNotification()
     }
@@ -734,9 +968,15 @@ class RecordingService : LifecycleService() {
 
     override fun onDestroy() {
         telemetryCollector.stop()
+        visionAnalyzer.setEnabled(false)
+        depthProvider.stop()
         currentRecording?.stop()
         cameraProvider?.unbindAll()
+        imageAnalysis?.clearAnalyzer()
         cameraInitializationJob?.cancel()
+        visionAnalyzer.close()
+        trafficModelRunner.close()
+        depthProvider.close()
         super.onDestroy()
     }
 
@@ -766,5 +1006,9 @@ class RecordingService : LifecycleService() {
         private const val SEGMENT_DURATION_MS = 60_000L
         private const val SAVE_WINDOW_NS = 60_000_000_000L
         private const val MANUAL_SAVE_EVENT = "MANUAL_SAVE"
+        private const val TRAFFIC_STATUS_LOG_INTERVAL_NS = 5_000_000_000L
+        private const val DEPTH_ASSOCIATION_WINDOW_NS = 1_000_000_000L
+        private const val FRONT_APPROACH_TTC_SECONDS = 3f
+        private const val FRONT_APPROACH_COOLDOWN_NS = 3_000_000_000L
     }
 }
