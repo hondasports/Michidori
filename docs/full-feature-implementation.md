@@ -4,7 +4,7 @@
 
 ## 実装範囲
 
-- CameraX の `HIGH`（4K/30fps/H.265）、`BALANCED`（1080p/60fps/H.265）、`ECO`（1080p/30fps/H.265）を capability 順に選択する。H.265、品質、0.5x lens が利用できない場合は H.264、低い品質、main lens へ fallback し、要求 profile・実際の CameraX quality・適用結果と理由を `segments.tsv` に残す。
+- CameraX の `HIGH`（4K/30fps/H.265）、`BALANCED`（1080p/60fps/H.265）、`ECO`（1080p/30fps/H.265）を capability 順に選択する。H.265、品質、0.5x lens が利用できない場合は H.264、低い品質、main lens へ fallback し、要求 profile・実際の CameraX quality・適用結果と理由を `segments.tsv` に残す。0.5x はlogical back camera配下のCamera2 physical camera infosを焦点距離で選び、`CameraSelector.Builder.setPhysicalCameraId()` で全use caseを同じ超広角sensorへbindする。
 - battery level、charging、battery temperature、PowerManager thermal status を telemetry の monotonic sample に添付する。熱が `MODERATE` 以上なら HIGH→BALANCED、`SEVERE` 以上なら ECO へ下げ、セグメント境界で録画を継続したまま再bindする。
 - `TYPE_LINEAR_ACCELERATION` と gyroscope から `HARD_BRAKE`、`HARD_ACCELERATION`、`SHARP_TURN`、`IMPACT` の候補を検出する。線形加速度が無い端末では重力込み加速度による方向性イベントを無効化し、誤検知を避ける。候補には severity、confidence、source、根拠値を付け、cooldown で重複を抑える。
 - CameraX `ImageAnalysis` と ML Kit Object Detection STREAM_MODE で、複数物体・classification・tracking ID を扱う。分析 use case の bind に失敗しても `Preview`/`VideoCapture` だけへ戻して録画を続ける。
@@ -40,16 +40,15 @@
 
 純粋ロジックは `MotionEventDetectorTest`、`TtcEstimatorTest`、リング・イベント・export の store tests で確認する。Emulator は本環境に emulator executable / AVD が無いため未実施とする。
 
-Pixel 10 Pro は mDNS で `192.168.10.136:40097` に接続し、現行 debug APK で `RecordingServiceInstrumentedTest` を実行した。録画開始・約3秒継続・停止、HEVC codec、telemetry 67行、invalid depth sample 2行を確認し、runner の clean log に `FATAL EXCEPTION`、`ANR`、`AR_ERROR_MISSING_GL_CONTEXT` は無かった。Pixel のセンサー一覧には linear acceleration、gyroscope、rotation vector が存在する。なお `HIGH` 要求時の実際の CameraX quality は `HD (1280x720)` へ fallback しており、`actualQuality` として保存する。
+Pixel 10 Pro は mDNS で `192.168.10.136:40097` に接続し、現行 debug APK で `RecordingServiceInstrumentedTest` を実行した。録画開始・約3秒継続・停止、HEVC codec、telemetry増加、invalid depth sampleを確認し、runnerのclean logに `FATAL EXCEPTION`、`ANR`、`AR_ERROR_MISSING_GL_CONTEXT` は無かった。Pixelのセンサー一覧にはlinear acceleration、gyroscope、rotation vectorが存在する。なお `HIGH` 要求時の実際のCameraX qualityは `HD (1280x720)` へfallbackしており、`actualQuality` として保存する。
 
-実機のUI操作で確認できた範囲では、REC、GPS OK、AI READY、battery/thermal 表示、H.265、0.5x 要求から 1x fallback の表示まで確認できた。Pixel の 0.5x は CameraX の zoom capability が `minZoomRatio=1.0` で、現端末の公開 CameraX 経路では main lens fallback が正しい結果やった。
+実機のUI操作では、REC、GPS OK、AI READY、battery/thermal表示、H.265、0.5x物理lensの録画開始・停止を確認した。旧zoom-only経路ではPixelの `minZoomRatio=1.0` により0.5xを指定できへんかったが、現在はCamera2 physical camera infosから焦点距離 `2.02` の背面候補を選び、CameraXのphysical camera selectorで録画している。最新のUI録画とinstrumentation後のsegment metadataは `lens=ultra_wide_0_5x`、`codec=video/hevc`、`actualQuality`ありやった。
 
 ARCore は availability probe までは実行するが、現行の録画構成では CameraX がカメラを所有しており、ARCore の通常 `Session` に必要な GL context と `SharedCamera` driver を持ってへん。そのため live Depth Session は意図的に起動せず、`DEPTH DEGRADED` と `valid=false` の sample を残す。以前の実装でこの条件を無視したときに native crash が実機で再現したため、録画保全を優先した安全な degraded 境界として固定している。live Depth を有効化するには、CameraX recorder と互換な `SharedCamera`/GL lifecycle を別途設計する必要がある。
 
 残っている実機依存の追加計測は以下や。
 
 - H.265 / 4K / 60fps の actual codec と segment metadata
-- 1x / 0.5x の actual lens と fallback
 - ML Kit frame throughput / dropped frame / recording integrity
 - AICore status と foreground explanation
 - thermal downgrade、battery drain、prolonged recording
@@ -64,4 +63,6 @@ ARCore は availability probe までは実行するが、現行の録画構成�
 - [ARCore Depth developer guide](https://developers.google.com/ar/develop/java/depth/developer-guide)
 - [LiteRT on Android](https://developers.google.cn/edge/litert/android)
 - [ML Kit Prompt API](https://developers.google.com/ml-kit/genai/prompt/android/get-started)
+- [CameraX Camera2Interop](https://developer.android.com/reference/androidx/camera/camera2/interop/Camera2Interop)
+- [CameraX CameraInfo physical cameras](https://developer.android.com/reference/androidx/camera/core/CameraInfo)
 - [AndroidX Media3 Transformer / playback documentation](https://developer.android.com/media/media3)

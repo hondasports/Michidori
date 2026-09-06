@@ -10,11 +10,14 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.camera2.CameraCharacteristics
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Range
+import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.DynamicRange
 import androidx.camera.core.ImageAnalysis
@@ -711,7 +714,7 @@ class RecordingService : LifecycleService() {
         supportedMimeTypes: Set<String>,
         thermalReason: String?,
     ): CameraBinding {
-        val selector = cameraSelectorFor()
+        val selector = cameraSelectorFor(provider, appliedLens)
         check(provider.hasCamera(selector)) { "背面カメラが利用できへん" }
         val cameraInfo = provider.getCameraInfo(selector)
         val capabilities = Recorder.getVideoCapabilities(cameraInfo, mimeType)
@@ -768,11 +771,12 @@ class RecordingService : LifecycleService() {
                 LensMode.MAIN_1X
             }
             LensMode.ULTRA_WIDE_0_5X -> {
-                val minZoomRatio = boundCamera.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
-                check(minZoomRatio <= ULTRA_WIDE_ZOOM_RATIO) {
-                    "0.5x zoomが利用できへん（minZoom=$minZoomRatio）"
+                check(selector.physicalCameraId != null) {
+                    "0.5x用の物理超広角カメラが選択できへん"
                 }
-                boundCamera.cameraControl.setZoomRatio(ULTRA_WIDE_ZOOM_RATIO)
+                // The selected physical sensor is already the wide lens. Its
+                // native 1x is the requested 0.5x view relative to the main lens.
+                boundCamera.cameraControl.setZoomRatio(1f)
                 LensMode.ULTRA_WIDE_0_5X
             }
         }
@@ -812,8 +816,38 @@ class RecordingService : LifecycleService() {
         )
     }
 
-    /** CameraX exposes logical multi-camera switching through zoom on supported devices. */
-    private fun cameraSelectorFor(): CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+    private fun cameraSelectorFor(
+        provider: ProcessCameraProvider,
+        lensMode: LensMode,
+    ): CameraSelector {
+        val mainSelector = CameraSelector.DEFAULT_BACK_CAMERA
+        if (lensMode == LensMode.MAIN_1X) return mainSelector
+
+        val logicalInfo = provider.getCameraInfo(mainSelector)
+        val mainFocalLengthMm = focalLengthMm(logicalInfo)
+        val physicalCandidates = logicalInfo.getPhysicalCameraInfos().mapNotNull { info ->
+            val cameraId = runCatching { Camera2Interop.getCameraId(info) }.getOrNull()
+            val focalLengthMm = focalLengthMm(info)
+            if (cameraId == null || focalLengthMm == null || info.lensFacing != CameraSelector.LENS_FACING_BACK) {
+                null
+            } else {
+                PhysicalLensCandidate(cameraId, focalLengthMm)
+            }
+        }
+        val ultraWide = CameraLensSelector.chooseUltraWide(mainFocalLengthMm, physicalCandidates)
+            ?: throw IllegalStateException("0.5x用の物理超広角カメラが利用できへん")
+        return CameraSelector.Builder()
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+            .setPhysicalCameraId(ultraWide.cameraId)
+            .build()
+    }
+
+    private fun focalLengthMm(cameraInfo: CameraInfo): Float? = runCatching {
+        Camera2Interop.getCameraCharacteristics(cameraInfo)
+            .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.minOrNull()
+            ?.takeIf { it.isFinite() && it > 0f }
+    }.getOrNull()
 
     private fun qualityCandidates(profile: CaptureQualityProfile): List<CaptureQualityProfile> = when (profile) {
         CaptureQualityProfile.HIGH -> listOf(
@@ -1047,6 +1081,5 @@ class RecordingService : LifecycleService() {
         private const val DEPTH_ASSOCIATION_WINDOW_NS = 1_000_000_000L
         private const val FRONT_APPROACH_TTC_SECONDS = 3f
         private const val FRONT_APPROACH_COOLDOWN_NS = 3_000_000_000L
-        private const val ULTRA_WIDE_ZOOM_RATIO = 0.5f
     }
 }
