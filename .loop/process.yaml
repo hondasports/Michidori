@@ -1,4 +1,4 @@
-version: 1
+version: 2
 name: michidori-agent-loop
 entrypoint: AGENTS.md
 entry_state: prepare
@@ -9,7 +9,8 @@ principles:
   - Spec ConfidenceとRiskを分離する
   - shared diffのwriterは原則1体
   - same-content Evidenceを再利用する
-  - PR作成はcheckpointとする
+  - mainへ検証済みの小さな論理単位でcommitする
+  - PRは明示要求または技術的必要時だけ使う
   - stage間はcompact contractを引き継ぐ
   - EmulatorとPixel実機の責務を分離する
   - 録画継続性をAI/Depthより優先する
@@ -93,8 +94,7 @@ loop:
     - implementation
     - verification
     - review_if_required
-    - delivery
-    - pr_aftercare
+    - commit_and_push
     - done
 
 prepare:
@@ -114,12 +114,14 @@ prepare:
     - coverage_map
     - verification_plan
     - emulator_vs_pixel_plan
+    - commit_boundary
 
 implementation:
   rules:
     - compact contractに必要な最小差分だけ変更する
     - 新しいpermission/background/hardware/persistence影響を見つけたらPREPAREをdelta更新する
     - AI/Depth失敗で録画本体を不要に停止させない
+    - 大きなtaskは独立して検証できる縦切りへ分割する
 
 verification:
   execution_order:
@@ -129,7 +131,6 @@ verification:
     - emulator_gps_sensor_injection
     - pixel_targeted_when_hardware_dependent
     - pixel_prolonged_when_recording_or_performance_changed
-    - ci_aftercare
   rules:
     - material failure後に高コスト検証を続行しない
     - 同一内容のfull checkを理由なく繰り返さない
@@ -148,9 +149,25 @@ review:
     - privacy_boundary_expansion
     - scope_creep
 
+commit_policy:
+  default_branch: main
+  direct_main: true
+  create_task_branch_by_default: false
+  create_pr_by_default: false
+  require_pr_when:
+    - explicit_user_request
+    - direct_main_technically_blocked
+    - external_review_is_required
+  rules:
+    - required Verification / Review完了前にpushしない
+    - 1 commit = 1 logical changeを基本にする
+    - unrelated changeを同じcommitへ混ぜない
+    - 次の論理変更へ進む前にcurrent commitを完了状態へする
+    - broken intermediate stateをmainへpushしない
+
 delivery:
-  target: merge_ready_pr
-  allow_direct_main_edit: false
+  target: verified_commit_pushed_to_main
+  allow_direct_main_edit: true
 
 done:
   requires:
@@ -159,4 +176,4 @@ done:
     - required_verification_complete
     - required_review_complete
     - no_blocking_finding
-    - delivery_target_reached
+    - verified_commit_pushed_to_main
