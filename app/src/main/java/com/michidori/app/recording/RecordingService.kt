@@ -14,7 +14,6 @@ import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
 import android.util.Range
-import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.DynamicRange
@@ -34,7 +33,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
-import android.hardware.camera2.CameraCharacteristics
 import com.google.common.util.concurrent.ListenableFuture
 import com.michidori.app.MainActivity
 import com.michidori.app.R
@@ -141,6 +139,9 @@ class RecordingService : LifecycleService() {
             context = this,
             onSample = ::onDepthSample,
             onStatus = ::onDepthStatus,
+            // CameraX owns the recorder camera; a SharedCamera + GL driver is
+            // required before a live ARCore session can be enabled safely.
+            allowLiveSession = false,
         )
         _uiState.update {
             it.copy(
@@ -571,6 +572,7 @@ class RecordingService : LifecycleService() {
                         startElapsedNs = startNs,
                         endElapsedNs = SystemClock.elapsedRealtimeNanos(),
                         qualityProfile = segmentSelection?.appliedQuality?.id,
+                        actualQuality = segmentSelection?.actualCameraQuality?.toString(),
                         codecMimeType = segmentSelection?.codecMimeType,
                         lensMode = segmentSelection?.appliedLens?.id,
                     ),
@@ -709,8 +711,8 @@ class RecordingService : LifecycleService() {
         supportedMimeTypes: Set<String>,
         thermalReason: String?,
     ): CameraBinding {
-        val selector = cameraSelectorFor(appliedLens)
-        check(provider.hasCamera(selector)) { "${appliedLens.displayName} cameraが利用できへん" }
+        val selector = cameraSelectorFor()
+        check(provider.hasCamera(selector)) { "背面カメラが利用できへん" }
         val cameraInfo = provider.getCameraInfo(selector)
         val capabilities = Recorder.getVideoCapabilities(cameraInfo, mimeType)
             ?: Recorder.getVideoCapabilities(cameraInfo)
@@ -760,14 +762,28 @@ class RecordingService : LifecycleService() {
             attachedAnalysis = null
             analysisFallbackReason = "ImageAnalysis未接続（録画を優先）"
         }
+        val actualLens = when (appliedLens) {
+            LensMode.MAIN_1X -> {
+                boundCamera.cameraControl.setZoomRatio(1f)
+                LensMode.MAIN_1X
+            }
+            LensMode.ULTRA_WIDE_0_5X -> {
+                val minZoomRatio = boundCamera.cameraInfo.zoomState.value?.minZoomRatio ?: 1f
+                check(minZoomRatio <= ULTRA_WIDE_ZOOM_RATIO) {
+                    "0.5x zoomが利用できへん（minZoom=$minZoomRatio）"
+                }
+                boundCamera.cameraControl.setZoomRatio(ULTRA_WIDE_ZOOM_RATIO)
+                LensMode.ULTRA_WIDE_0_5X
+            }
+        }
         val actualQuality = capture.selectedQuality
         val fallbackReasons = buildList {
             thermalReason?.let(::add)
             if (appliedQuality != requestedQuality) {
                 add("${requestedQuality.displayName} は未対応/thermal fallbackのため ${appliedQuality.displayName}")
             }
-            if (appliedLens != requestedLens) {
-                add("${requestedLens.displayName} が未対応のため ${appliedLens.displayName} を使用")
+            if (actualLens != requestedLens) {
+                add("${requestedLens.displayName} が未対応のため ${actualLens.displayName} を使用")
             }
             if (mimeType != CaptureQualityProfile.VIDEO_MIME_HEVC) {
                 add("H.265が未対応のためH.264へfallback")
@@ -786,7 +802,7 @@ class RecordingService : LifecycleService() {
                 requestedQuality = requestedQuality,
                 appliedQuality = appliedQuality,
                 requestedLens = requestedLens,
-                appliedLens = appliedLens,
+                appliedLens = actualLens,
                 codecMimeType = mimeType,
                 fallbackReason = fallbackReasons,
                 supportedQualities = supportedQualities,
@@ -796,23 +812,8 @@ class RecordingService : LifecycleService() {
         )
     }
 
-    private fun cameraSelectorFor(lensMode: LensMode): CameraSelector = when (lensMode) {
-        LensMode.MAIN_1X -> CameraSelector.DEFAULT_BACK_CAMERA
-        LensMode.ULTRA_WIDE_0_5X -> CameraSelector.Builder()
-            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
-            .addCameraFilter { infos ->
-                val focalLengths = infos.mapNotNull { info ->
-                    runCatching {
-                        Camera2CameraInfo.from(info)
-                            .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-                            ?.minOrNull()
-                            ?.let { info to it }
-                    }.getOrNull()
-                }
-                if (focalLengths.size < 2) emptyList() else listOf(focalLengths.minBy { it.second }.first)
-            }
-            .build()
-    }
+    /** CameraX exposes logical multi-camera switching through zoom on supported devices. */
+    private fun cameraSelectorFor(): CameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
     private fun qualityCandidates(profile: CaptureQualityProfile): List<CaptureQualityProfile> = when (profile) {
         CaptureQualityProfile.HIGH -> listOf(
@@ -1046,5 +1047,6 @@ class RecordingService : LifecycleService() {
         private const val DEPTH_ASSOCIATION_WINDOW_NS = 1_000_000_000L
         private const val FRONT_APPROACH_TTC_SECONDS = 3f
         private const val FRONT_APPROACH_COOLDOWN_NS = 3_000_000_000L
+        private const val ULTRA_WIDE_ZOOM_RATIO = 0.5f
     }
 }

@@ -29,6 +29,7 @@ class SegmentExportStoreTest {
             startElapsedNs = 0L,
             endElapsedNs = 10L,
             qualityProfile = "high",
+            actualQuality = "UHD",
             codecMimeType = "video/hevc",
             lensMode = "main_1x",
         )

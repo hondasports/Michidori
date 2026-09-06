@@ -86,6 +86,7 @@ class SegmentStoreTest {
                 startElapsedNs = 0L,
                 endElapsedNs = 1_000L,
                 qualityProfile = CaptureQualityProfile.HIGH.id,
+                actualQuality = "HD",
                 codecMimeType = CaptureQualityProfile.VIDEO_MIME_HEVC,
                 lensMode = LensMode.ULTRA_WIDE_0_5X.id,
             ),
@@ -94,6 +95,7 @@ class SegmentStoreTest {
         val reloaded = SegmentStore(root).listSegments().single()
 
         assertEquals(CaptureQualityProfile.HIGH.id, reloaded.qualityProfile)
+        assertEquals("HD", reloaded.actualQuality)
         assertEquals(CaptureQualityProfile.VIDEO_MIME_HEVC, reloaded.codecMimeType)
         assertEquals(LensMode.ULTRA_WIDE_0_5X.id, reloaded.lensMode)
     }

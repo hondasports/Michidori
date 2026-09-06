@@ -83,6 +83,7 @@ Event              ★
 - [Architecture](docs/architecture.md)
 - [Development process](docs/development-process.md)
 - [MVP implementation](docs/mvp-implementation.md)
+- [Full-feature implementation](docs/full-feature-implementation.md)
 - [Agent loop](.loop/README.md)
 - [Agent OS](.loop/AGENT_OS.md)
 

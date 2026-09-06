@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
+import com.google.ar.core.exceptions.MissingGlContextException
 import com.google.ar.core.exceptions.NotYetAvailableException
 import com.google.ar.core.Session
 import java.nio.ByteOrder
@@ -15,6 +16,12 @@ class ArCoreDepthProvider(
     context: Context,
     private val onSample: (DepthSample) -> Unit,
     private val onStatus: (DepthStatus, String) -> Unit,
+    /**
+     * A live ARCore session needs a GL owner and a camera shared with ARCore.
+     * CameraX owns the camera in the current recorder, so this remains false
+     * until a SharedCamera/GL driver is supplied.
+     */
+    private val allowLiveSession: Boolean = false,
 ) : AutoCloseable {
     private val appContext = context.applicationContext
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -37,16 +44,31 @@ class ArCoreDepthProvider(
         val availability = runCatching { ArCoreApk.getInstance().checkAvailability(appContext) }.getOrNull()
         if (availability == null || !availability.isSupported) {
             emitStatus(DepthStatus.UNSUPPORTED, "この端末ではARCoreが利用できへん")
+            emitInvalidSample("ARCore unsupported")
+            running = false
+            return
+        }
+
+        // Session.update() performs off-screen GL work and a normal Session
+        // takes exclusive camera ownership. Starting it beside CameraX would
+        // either fail or, on some ARCore builds, abort during native cleanup.
+        // Keep this provider explicitly degraded until the recorder supplies
+        // a real SharedCamera + GL lifecycle.
+        if (!allowLiveSession) {
+            emitStatus(DepthStatus.DEGRADED, "CameraX録画とARCoreのshared camera/GL接続がなくdegraded")
+            emitInvalidSample("CameraX owns camera; SharedCamera/GL driver unavailable")
             running = false
             return
         }
 
         val activeSession = runCatching { Session(appContext) }.getOrElse {
             emitStatus(DepthStatus.ERROR, "ARCore Sessionを作れへん")
+            emitInvalidSample("ARCore Session creation failed")
             running = false
             return
         }
         session = activeSession
+        var missingGlContext = false
         try {
             if (!activeSession.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
                 emitStatus(DepthStatus.UNSUPPORTED, "Depth APIが未対応")
@@ -63,11 +85,21 @@ class ArCoreDepthProvider(
                 captureOne(activeSession)
                 Thread.sleep(SAMPLE_INTERVAL_MS)
             }
+        } catch (_: MissingGlContextException) {
+            missingGlContext = true
+            emitStatus(DepthStatus.DEGRADED, "ARCoreにGL contextがなくdegraded")
+            emitInvalidSample("ARCore GL context unavailable")
         } catch (failure: Exception) {
             if (running) emitStatus(DepthStatus.DEGRADED, "ARCore cameraが録画と競合したためdegraded")
+            emitInvalidSample(failure.message ?: "ARCore depth session failed")
         } finally {
-            runCatching { activeSession.pause() }
-            runCatching { activeSession.close() }
+            // A MissingGlContextException can make native close unsafe. The
+            // worker owns the session, and stop() only flips the flag so that
+            // cleanup cannot race this block from the service main thread.
+            if (!missingGlContext) {
+                runCatching { activeSession.pause() }
+                runCatching { activeSession.close() }
+            }
             session = null
             if (running) emitStatus(DepthStatus.DEGRADED, "ARCore Depthを停止したで")
         }
@@ -105,9 +137,24 @@ class ArCoreDepthProvider(
                     reason = "depth frame未取得",
                 ),
             )
+        } catch (failure: MissingGlContextException) {
+            throw failure
         } catch (_: IllegalStateException) {
             emitStatus(DepthStatus.DEGRADED, "ARCore trackingが安定してへん")
         }
+    }
+
+    private fun emitInvalidSample(reason: String) {
+        onSample(
+            DepthSample(
+                elapsedNs = SystemClock.elapsedRealtimeNanos(),
+                distanceMeters = null,
+                valid = false,
+                confidence = 0f,
+                source = "arcore_center_depth",
+                reason = reason,
+            ),
+        )
     }
 
     private fun readCenterMillimeters(
@@ -131,9 +178,6 @@ class ArCoreDepthProvider(
 
     fun stop() {
         running = false
-        runCatching { session?.pause() }
-        runCatching { session?.close() }
-        session = null
     }
 
     override fun close() {

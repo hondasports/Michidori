@@ -14,7 +14,7 @@
 - GPS unavailable 時も映像録画を継続する degraded path
 - リング保持、イベント保護、timestamp、telemetry serialization の JVM テスト
 
-動画は `files/recordings/*.mp4`、セグメント索引は `segments.tsv`、イベントは `events.tsv`、telemetry は `files/telemetry/telemetry.ndjson` に保存する。外部サービスへの送信・共有・エクスポートは実装しておらず、Androidのcloud backup/端末転送からも除外している。
+動画は `files/recordings/*.mp4`、セグメント索引は `segments.tsv`、イベントは `events.tsv`、telemetry は `files/telemetry/telemetry.ndjson` に保存する。共有・エクスポートは履歴からの明示操作時だけ FileProvider URI を渡し、Androidのcloud backup/端末転送からは初期状態で除外している。
 
 ## Verification contract
 
@@ -48,8 +48,8 @@ adb -s <device-ip>:<tls-port> install -r app\build\outputs\apk\debug\app-debug.a
 
 実機で確認した最小フローは、カメラ/位置情報を許可して起動、`録画開始`、数秒後に `SAVE`、`停止`。確認結果は、Foreground Service、`REC`、`GPS OK`、速度表示、telemetry件数増加、`PROTECTED=1`、mp4/ts/ndjsonファイル生成が揃うことやった。
 
-## 意図的な未実装
+## Full-feature への拡張
 
-4K/30fps H.265、1080p/60fps、レンズ切替、ARCore Depth、ML Kit/LiteRT、Gemini Nano、自動イベント検知、thermal policy、長時間録画は次の計測sliceで扱う。Pixel 10 Pro の実測なしに初期品質を削らない方針やけど、今回の既定品質はエミュレータ互換性を優先してHD/SD fallbackにしている。
+4K/30fps H.265、1080p/60fps、レンズ切替、ARCore Depth、ML Kit/LiteRT、Gemini Nano、自動イベント検知、thermal policy、イベント履歴・再生・明示 export/share は実装済みや。capability が無い端末では録画を正本として fallback/degraded 状態を保存する。追加の API/実機検証状況と未解決 finding は [Full-feature implementation](full-feature-implementation.md) にまとめてある。
 
 このMVPは安全運転支援や法的証拠を保証するものではない。推定値・GPS・映像は走行状況の後解析用として扱う。

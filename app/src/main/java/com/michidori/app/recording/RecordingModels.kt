@@ -19,6 +19,7 @@ data class RecordingSegment(
     val endElapsedNs: Long,
     val isProtected: Boolean = false,
     val qualityProfile: String? = null,
+    val actualQuality: String? = null,
     val codecMimeType: String? = null,
     val lensMode: String? = null,
 ) {

@@ -31,6 +31,7 @@ class SegmentExportStore(private val recordingsRoot: File) {
                 "\"startElapsedNs\":${segment.startElapsedNs}," +
                 "\"endElapsedNs\":${segment.endElapsedNs}," +
                 "\"qualityProfile\":\"${segment.qualityProfile.orEmpty().escapeJson()}\"," +
+                "\"actualQuality\":\"${segment.actualQuality.orEmpty().escapeJson()}\"," +
                 "\"codecMimeType\":\"${segment.codecMimeType.orEmpty().escapeJson()}\"," +
                 "\"lensMode\":\"${segment.lensMode.orEmpty().escapeJson()}\"," +
                 "\"overlay\":\"metadata sidecar（元動画には焼き込まへん）\"," +
