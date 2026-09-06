@@ -1,6 +1,7 @@
 package com.michidori.app.recording
 
 import com.michidori.app.depth.DepthUiState
+import com.michidori.app.ai.EventExplanation
 import com.michidori.app.vision.VisionUiState
 
 enum class RecordingStatus {
@@ -52,6 +53,10 @@ data class RecordingUiState(
     val depth: DepthUiState = DepthUiState(),
     val trafficModelStatus: String = "MODEL_MISSING",
     val trafficModelMessage: String = "LiteRT modelが未搭載",
+    val segments: List<RecordingSegment> = emptyList(),
+    val events: List<DashcamEvent> = emptyList(),
+    val eventExplanations: Map<String, EventExplanation> = emptyMap(),
+    val explainingEventId: String? = null,
 ) {
     val isRecording: Boolean
         get() = status == RecordingStatus.RECORDING || status == RecordingStatus.STOPPING

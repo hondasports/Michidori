@@ -68,6 +68,9 @@ dependencies {
     implementation("com.google.mlkit:object-detection:17.0.2")
     implementation("com.google.ai.edge.litert:litert:2.1.0")
     implementation("com.google.ar:core:1.50.0")
+    implementation("com.google.mlkit:genai-prompt:1.0.0-beta2")
+    implementation("androidx.media3:media3-exoplayer:1.11.0")
+    implementation("androidx.media3:media3-ui:1.11.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

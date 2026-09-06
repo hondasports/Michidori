@@ -38,6 +38,8 @@ import android.hardware.camera2.CameraCharacteristics
 import com.google.common.util.concurrent.ListenableFuture
 import com.michidori.app.MainActivity
 import com.michidori.app.R
+import com.michidori.app.ai.EventAnalysisStore
+import com.michidori.app.ai.GeminiEventExplainer
 import com.michidori.app.depth.ArCoreDepthProvider
 import com.michidori.app.depth.DepthSample
 import com.michidori.app.depth.DepthStatus
@@ -77,6 +79,9 @@ class RecordingService : LifecycleService() {
     private val _uiState = MutableStateFlow(RecordingUiState())
     private lateinit var segmentStore: SegmentStore
     private lateinit var eventStore: DashcamEventStore
+    private lateinit var exportStore: SegmentExportStore
+    private lateinit var eventAnalysisStore: EventAnalysisStore
+    private lateinit var geminiEventExplainer: GeminiEventExplainer
     private lateinit var telemetryCollector: TelemetryCollector
     private lateinit var captureSettingsStore: CaptureSettingsStore
     private lateinit var visionStore: VisionStore
@@ -119,6 +124,9 @@ class RecordingService : LifecycleService() {
         val recordingsRoot = File(filesDir, RECORDINGS_DIRECTORY)
         segmentStore = SegmentStore(recordingsRoot)
         eventStore = DashcamEventStore(recordingsRoot)
+        exportStore = SegmentExportStore(recordingsRoot)
+        eventAnalysisStore = EventAnalysisStore(recordingsRoot)
+        geminiEventExplainer = GeminiEventExplainer()
         captureSettingsStore = CaptureSettingsStore(this)
         visionStore = VisionStore(recordingsRoot)
         depthStore = com.michidori.app.depth.DepthStore(recordingsRoot)
@@ -286,6 +294,29 @@ class RecordingService : LifecycleService() {
         _uiState.update { it.copy(lastEventType = event.type) }
         refreshSegmentState()
         updateNotification()
+    }
+
+    /** Called only by the foreground Activity's event-details action. */
+    fun explainEvent(eventId: String) {
+        if (_uiState.value.explainingEventId != null) return
+        val event = eventStore.list().firstOrNull { it.id == eventId } ?: return
+        _uiState.update { it.copy(explainingEventId = eventId) }
+        lifecycleScope.launch {
+            val explanation = geminiEventExplainer.explain(event)
+            eventAnalysisStore.append(explanation)
+            _uiState.update {
+                it.copy(
+                    explainingEventId = null,
+                    eventExplanations = it.eventExplanations + (eventId to explanation),
+                )
+            }
+        }
+    }
+
+    /** Export is an explicit foreground action; the original clip is never rewritten. */
+    fun exportSegment(segmentId: String): ExportedSegment? {
+        val segment = segmentStore.listSegments().firstOrNull { it.id == segmentId } ?: return null
+        return exportStore.export(segment, eventStore.list())
     }
 
     private fun onMotionEvent(candidate: MotionEventCandidate) {
@@ -901,10 +932,15 @@ class RecordingService : LifecycleService() {
 
     private fun refreshSegmentState() {
         val segments = if (::segmentStore.isInitialized) segmentStore.listSegments() else emptyList()
+        val events = if (::eventStore.isInitialized) eventStore.list() else emptyList()
+        val explanations = if (::eventAnalysisStore.isInitialized) eventAnalysisStore.latestByEventId() else emptyMap()
         _uiState.update {
             it.copy(
                 segmentCount = segments.size,
                 protectedSegmentCount = segments.count(RecordingSegment::isProtected),
+                segments = segments,
+                events = events,
+                eventExplanations = explanations,
             )
         }
     }

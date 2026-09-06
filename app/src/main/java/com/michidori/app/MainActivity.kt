@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -25,6 +26,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,10 +55,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.michidori.app.recording.RecordingService
+import com.michidori.app.recording.RecordingSegment
 import com.michidori.app.recording.RecordingStatus
 import com.michidori.app.recording.RecordingUiState
+import com.michidori.app.recording.ExportedSegment
+import com.michidori.app.playback.PlaybackActivity
 import com.michidori.app.ui.MichidoriTheme
 import java.util.Locale
 
@@ -102,6 +109,11 @@ class MainActivity : ComponentActivity() {
                     onSaveEvent = { boundService?.saveManualEvent() },
                     onSetQualityProfile = { boundService?.setQualityProfile(it) },
                     onSetLensMode = { boundService?.setLensMode(it) },
+                    onExplainEvent = { boundService?.explainEvent(it) },
+                    onPlaySegment = ::openPlayback,
+                    onShareSegment = { segment ->
+                        boundService?.exportSegment(segment.id)?.let(::shareExport)
+                    },
                 )
             }
         }
@@ -144,6 +156,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openPlayback(segment: RecordingSegment) {
+        startActivity(
+            Intent(this, PlaybackActivity::class.java)
+                .putExtra(PlaybackActivity.EXTRA_FILE_NAME, segment.fileName),
+        )
+    }
+
+    private fun shareExport(exported: ExportedSegment) {
+        val videoUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", exported.video)
+        val metadataUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", exported.metadata)
+        val shareIntent = Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "video/mp4"
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf<Uri>(videoUri, metadataUri))
+            putExtra(Intent.EXTRA_TEXT, "元動画とmetadata sidecar。推定値は確定事実やないで。")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(shareIntent, "Michidoriの記録を共有"))
+    }
+
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
@@ -160,6 +191,9 @@ private fun MichidoriApp(
     onSaveEvent: () -> Unit,
     onSetQualityProfile: (com.michidori.app.recording.CaptureQualityProfile) -> Unit,
     onSetLensMode: (com.michidori.app.recording.LensMode) -> Unit,
+    onExplainEvent: (String) -> Unit,
+    onPlaySegment: (RecordingSegment) -> Unit,
+    onShareSegment: (RecordingSegment) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -193,6 +227,9 @@ private fun MichidoriApp(
                 onSaveEvent = onSaveEvent,
                 onSetQualityProfile = onSetQualityProfile,
                 onSetLensMode = onSetLensMode,
+                onExplainEvent = onExplainEvent,
+                onPlaySegment = onPlaySegment,
+                onShareSegment = onShareSegment,
             )
         }
     }
@@ -248,6 +285,9 @@ private fun RecordingDashboard(
     onSaveEvent: () -> Unit,
     onSetQualityProfile: (com.michidori.app.recording.CaptureQualityProfile) -> Unit,
     onSetLensMode: (com.michidori.app.recording.LensMode) -> Unit,
+    onExplainEvent: (String) -> Unit,
+    onPlaySegment: (RecordingSegment) -> Unit,
+    onShareSegment: (RecordingSegment) -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -273,6 +313,12 @@ private fun RecordingDashboard(
             onStartRecording = onStartRecording,
             onStopRecording = onStopRecording,
             onSaveEvent = onSaveEvent,
+        )
+        EventHistory(
+            state = state,
+            onExplainEvent = onExplainEvent,
+            onPlaySegment = onPlaySegment,
+            onShareSegment = onShareSegment,
         )
         Text(
             text = "映像は端末内に保存。GPS・センサー値は monotonic timestamp で別ログに記録するで。推定値は安全制御や法的証拠には使わんといてな。",
@@ -528,6 +574,81 @@ private fun ControlRow(
     }
 }
 
+@Composable
+private fun EventHistory(
+    state: RecordingUiState,
+    onExplainEvent: (String) -> Unit,
+    onPlaySegment: (RecordingSegment) -> Unit,
+    onShareSegment: (RecordingSegment) -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(176.dp),
+        colors = CardDefaults.cardColors(containerColor = MichidoriColors.surface),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("イベント履歴", color = MichidoriColors.textPrimary, fontWeight = FontWeight.SemiBold)
+            if (state.events.isEmpty()) {
+                Text("まだイベント候補は無いで", color = MichidoriColors.textMuted, fontSize = 12.sp)
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(state.events.takeLast(MAX_VISIBLE_EVENTS).asReversed(), key = { it.id }) { event ->
+                        val segment = state.segments.lastOrNull { it.overlaps(event.elapsedNs, event.elapsedNs) }
+                        val explanation = state.eventExplanations[event.id]
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.Top,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${event.type} · ${event.severity} · ${(event.confidence * 100).toInt()}%",
+                                    color = MichidoriColors.textSecondary,
+                                    fontSize = 12.sp,
+                                )
+                                event.details?.takeIf(String::isNotBlank)?.let { details ->
+                                    Text(details, color = MichidoriColors.textMuted, fontSize = 10.sp, maxLines = 1)
+                                }
+                                explanation?.let { memo ->
+                                    Text(
+                                        text = "${memo.source.name}: ${memo.text}",
+                                        color = MichidoriColors.textMuted,
+                                        fontSize = 10.sp,
+                                        maxLines = 2,
+                                    )
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = { onExplainEvent(event.id) },
+                                enabled = state.explainingEventId == null,
+                                modifier = Modifier.height(34.dp),
+                            ) {
+                                Text(if (state.explainingEventId == event.id) "…" else "説明", fontSize = 10.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { segment?.let(onPlaySegment) },
+                                enabled = segment != null,
+                                modifier = Modifier.height(34.dp),
+                            ) {
+                                Text("再生", fontSize = 10.sp)
+                            }
+                            OutlinedButton(
+                                onClick = { segment?.let(onShareSegment) },
+                                enabled = segment != null,
+                                modifier = Modifier.height(34.dp),
+                            ) {
+                                Text("共有", fontSize = 10.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private fun recordingLabel(status: RecordingStatus): String = when (status) {
     RecordingStatus.RECORDING -> "REC"
     RecordingStatus.STARTING -> "STARTING"
@@ -535,6 +656,8 @@ private fun recordingLabel(status: RecordingStatus): String = when (status) {
     RecordingStatus.ERROR -> "ERROR"
     RecordingStatus.IDLE -> "READY"
 }
+
+private const val MAX_VISIBLE_EVENTS = 8
 
 private fun formatElapsed(elapsedMs: Long): String {
     val totalSeconds = (elapsedMs / 1_000L).coerceAtLeast(0L)
