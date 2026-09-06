@@ -14,6 +14,9 @@ data class RecordingSegment(
     val startElapsedNs: Long,
     val endElapsedNs: Long,
     val isProtected: Boolean = false,
+    val qualityProfile: String? = null,
+    val codecMimeType: String? = null,
+    val lensMode: String? = null,
 ) {
     fun overlaps(startNs: Long, endNs: Long): Boolean =
         startElapsedNs <= endNs && endElapsedNs >= startNs
@@ -39,6 +42,7 @@ data class RecordingUiState(
     val telemetrySampleCount: Long = 0L,
     val lastEventType: String? = null,
     val lastError: String? = null,
+    val capture: CaptureUiState = CaptureUiState(),
 ) {
     val isRecording: Boolean
         get() = status == RecordingStatus.RECORDING || status == RecordingStatus.STOPPING

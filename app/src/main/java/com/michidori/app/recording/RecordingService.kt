@@ -1,6 +1,7 @@
 package com.michidori.app.recording
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -12,7 +13,11 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.util.Range
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.DynamicRange
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FileOutputOptions
@@ -28,6 +33,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import android.hardware.camera2.CameraCharacteristics
 import com.google.common.util.concurrent.ListenableFuture
 import com.michidori.app.MainActivity
 import com.michidori.app.R
@@ -48,14 +54,18 @@ import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+@SuppressLint("UnsafeOptInUsageError")
+@Suppress("DEPRECATION")
 class RecordingService : LifecycleService() {
     private val binder = LocalBinder()
     private val _uiState = MutableStateFlow(RecordingUiState())
     private lateinit var segmentStore: SegmentStore
     private lateinit var eventStore: DashcamEventStore
     private lateinit var telemetryCollector: TelemetryCollector
+    private lateinit var captureSettingsStore: CaptureSettingsStore
 
     private var cameraProvider: ProcessCameraProvider? = null
+    private var camera: Camera? = null
     private var previewUseCase: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var previewSurfaceProvider: Preview.SurfaceProvider? = null
@@ -65,11 +75,13 @@ class RecordingService : LifecycleService() {
     private var currentRecording: Recording? = null
     private var currentSegmentId: String? = null
     private var currentSegmentFile: File? = null
-    private var currentSegmentStartNs: Long = 0L
+    private var currentSegmentSelection: CaptureSelection? = null
     private var sessionStartElapsedMs: Long = 0L
     private var sessionActive = false
     private var stopRequested = false
     private var pendingStart = false
+    private var continueSessionAfterRebind = false
+    private var rebindForNextSegment = false
     private val pendingSaveElapsedNs = mutableListOf<Long>()
 
     val uiState: StateFlow<RecordingUiState> = _uiState.asStateFlow()
@@ -79,6 +91,7 @@ class RecordingService : LifecycleService() {
         val recordingsRoot = File(filesDir, RECORDINGS_DIRECTORY)
         segmentStore = SegmentStore(recordingsRoot)
         eventStore = DashcamEventStore(recordingsRoot)
+        captureSettingsStore = CaptureSettingsStore(this)
         telemetryCollector = TelemetryCollector(
             context = this,
             store = TelemetryStore(File(filesDir, TELEMETRY_DIRECTORY)),
@@ -90,9 +103,27 @@ class RecordingService : LifecycleService() {
                         gpsAvailable = telemetry.gpsAvailable,
                         speedKmh = telemetry.speedKmh,
                         telemetrySampleCount = telemetry.sampleCount,
+                        capture = it.capture.copy(
+                            thermalStatus = telemetry.thermalStatus,
+                            thermalLabel = telemetry.thermalLabel,
+                            batteryPercent = telemetry.batteryPercent,
+                            isCharging = telemetry.isCharging,
+                            batteryTemperatureC = telemetry.batteryTemperatureC,
+                        ),
                     )
                 }
+                applyThermalPolicyIfNeeded(telemetry.thermalStatus)
             }
+        }
+        _uiState.update {
+            it.copy(
+                capture = it.capture.copy(
+                    selection = it.capture.selection.copy(
+                        requestedQuality = captureSettingsStore.qualityProfile(),
+                        requestedLens = captureSettingsStore.lensMode(),
+                    ),
+                ),
+            )
         }
         refreshSegmentState()
     }
@@ -123,13 +154,57 @@ class RecordingService : LifecycleService() {
     fun startRecording() {
         if (sessionActive || _uiState.value.status == RecordingStatus.STARTING) return
         stopRequested = false
+        val thermalDecision = ThermalQualityPolicy.choose(
+            captureSettingsStore.qualityProfile(),
+            telemetryCollector.uiState.value.thermalStatus,
+        )
         if (videoCapture == null) {
             pendingStart = true
             _uiState.update { it.copy(status = RecordingStatus.STARTING, lastError = null) }
             initializeCamera()
             return
         }
+        if (_uiState.value.capture.selection.appliedQuality != thermalDecision.applied) {
+            pendingStart = true
+            _uiState.update { it.copy(status = RecordingStatus.STARTING, lastError = null) }
+            rebindCamera()
+            return
+        }
         beginRecordingSession()
+    }
+
+    fun setQualityProfile(profile: CaptureQualityProfile) {
+        captureSettingsStore.setQualityProfile(profile)
+        _uiState.update {
+            it.copy(
+                capture = it.capture.copy(
+                    selection = it.capture.selection.copy(requestedQuality = profile),
+                ),
+            )
+        }
+        if (!sessionActive) {
+            rebindCamera()
+        } else {
+            applyThermalPolicyIfNeeded(telemetryCollector.uiState.value.thermalStatus)
+        }
+    }
+
+    fun setLensMode(mode: LensMode) {
+        captureSettingsStore.setLensMode(mode)
+        _uiState.update {
+            it.copy(
+                capture = it.capture.copy(
+                    selection = it.capture.selection.copy(requestedLens = mode),
+                ),
+            )
+        }
+        if (!sessionActive) {
+            rebindCamera()
+        } else if (currentRecording != null && !stopRequested && !rebindForNextSegment) {
+            rebindForNextSegment = true
+            rotationJob?.cancel()
+            currentRecording?.stop()
+        }
     }
 
     fun stopRecording() {
@@ -192,15 +267,16 @@ class RecordingService : LifecycleService() {
 
         val segmentId = UUID.randomUUID().toString()
         val file = segmentStore.newSegmentFile(segmentId)
+        val segmentStartNs = SystemClock.elapsedRealtimeNanos()
         currentSegmentId = segmentId
         currentSegmentFile = file
-        currentSegmentStartNs = SystemClock.elapsedRealtimeNanos()
+        currentSegmentSelection = _uiState.value.capture.selection
 
         val outputOptions = FileOutputOptions.Builder(file).build()
         currentRecording = capture.output
             .prepareRecording(applicationContext, outputOptions)
             .start(ContextCompat.getMainExecutor(this)) { event ->
-                onVideoRecordEvent(segmentId, file, currentSegmentStartNs, event)
+                onVideoRecordEvent(segmentId, file, segmentStartNs, event)
             }
 
         rotationJob?.cancel()
@@ -230,6 +306,8 @@ class RecordingService : LifecycleService() {
                 currentRecording = null
                 currentSegmentId = null
                 currentSegmentFile = null
+                val segmentSelection = currentSegmentSelection
+                currentSegmentSelection = null
 
                 if (event.error != VideoRecordEvent.Finalize.ERROR_NONE) {
                     val cause = event.cause?.message?.takeIf { it.isNotBlank() }
@@ -247,6 +325,9 @@ class RecordingService : LifecycleService() {
                         fileName = file.name,
                         startElapsedNs = startNs,
                         endElapsedNs = SystemClock.elapsedRealtimeNanos(),
+                        qualityProfile = segmentSelection?.appliedQuality?.id,
+                        codecMimeType = segmentSelection?.codecMimeType,
+                        lensMode = segmentSelection?.appliedLens?.id,
                     ),
                 )
                 pendingSaveElapsedNs.forEach { saveElapsedNs ->
@@ -255,7 +336,12 @@ class RecordingService : LifecycleService() {
                 refreshSegmentState()
 
                 if (sessionActive && !stopRequested) {
-                    openNextSegment()
+                    if (rebindForNextSegment) {
+                        rebindForNextSegment = false
+                        rebindCamera(continueSession = true)
+                    } else {
+                        openNextSegment()
+                    }
                 } else {
                     finishRecordingSession()
                 }
@@ -272,31 +358,45 @@ class RecordingService : LifecycleService() {
         cameraInitializationJob = lifecycleScope.launch {
             try {
                 val provider = ProcessCameraProvider.getInstance(this@RecordingService).await()
-                val qualitySelector = QualitySelector.fromOrderedList(
-                    listOf(Quality.HD, Quality.SD),
-                    FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+                val requestedQuality = captureSettingsStore.qualityProfile()
+                val requestedLens = captureSettingsStore.lensMode()
+                val thermalDecision = ThermalQualityPolicy.choose(
+                    requestedQuality,
+                    telemetryCollector.uiState.value.thermalStatus,
                 )
-                val recorder = Recorder.Builder()
-                    .setQualitySelector(qualitySelector)
-                    .build()
-                val preview = Preview.Builder().build()
-                val capture = VideoCapture.withOutput(recorder)
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    this@RecordingService,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    capture,
+                val supportedMimeTypes = runCatching {
+                    Recorder.getSupportedVideoMimeTypes().toSet()
+                }.getOrDefault(emptySet())
+                val binding = bindWithFallbacks(
+                    provider = provider,
+                    requestedQuality = requestedQuality,
+                    initialQuality = thermalDecision.applied,
+                    requestedLens = requestedLens,
+                    supportedMimeTypes = supportedMimeTypes,
+                    thermalReason = thermalDecision.reason,
                 )
                 cameraProvider = provider
-                previewUseCase = preview
-                videoCapture = capture
-                previewSurfaceProvider?.let(preview::setSurfaceProvider)
-                _uiState.update { it.copy(cameraReady = true, lastError = null) }
+                camera = binding.camera
+                previewUseCase = binding.preview
+                videoCapture = binding.capture
+                previewSurfaceProvider?.let(binding.preview::setSurfaceProvider)
+                _uiState.update {
+                    it.copy(
+                        cameraReady = true,
+                        lastError = null,
+                        capture = it.capture.copy(
+                            selection = binding.selection,
+                            lastQualityFallback = binding.selection.fallbackReason,
+                        ),
+                    )
+                }
                 updateNotification()
                 if (pendingStart) {
                     pendingStart = false
                     beginRecordingSession()
+                } else if (continueSessionAfterRebind && sessionActive && !stopRequested) {
+                    continueSessionAfterRebind = false
+                    openNextSegment()
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -306,10 +406,212 @@ class RecordingService : LifecycleService() {
         }
     }
 
+    private fun bindWithFallbacks(
+        provider: ProcessCameraProvider,
+        requestedQuality: CaptureQualityProfile,
+        initialQuality: CaptureQualityProfile,
+        requestedLens: LensMode,
+        supportedMimeTypes: Set<String>,
+        thermalReason: String?,
+    ): CameraBinding {
+        val qualityCandidates = qualityCandidates(initialQuality)
+        val lensCandidates = listOf(requestedLens, LensMode.MAIN_1X).distinct()
+        val mimeCandidates = if (CaptureQualityProfile.VIDEO_MIME_HEVC in supportedMimeTypes) {
+            listOf(CaptureQualityProfile.VIDEO_MIME_HEVC, CaptureQualityProfile.VIDEO_MIME_AVC)
+        } else {
+            listOf(CaptureQualityProfile.VIDEO_MIME_AVC)
+        }
+        var binding: CameraBinding? = null
+        var lastFailure: Exception? = null
+
+        qualityCandidates.forEach { quality ->
+            lensCandidates.forEach { lens ->
+                mimeCandidates.forEach { mime ->
+                    if (binding == null) {
+                        runCatching {
+                            bindCamera(
+                                provider = provider,
+                                requestedQuality = requestedQuality,
+                                appliedQuality = quality,
+                                requestedLens = requestedLens,
+                                appliedLens = lens,
+                                mimeType = mime,
+                                supportedMimeTypes = supportedMimeTypes,
+                                thermalReason = thermalReason,
+                            )
+                        }.onSuccess { candidate ->
+                            binding = candidate
+                        }.onFailure { failure ->
+                            lastFailure = failure as? Exception ?: Exception(failure)
+                            provider.unbindAll()
+                        }
+                    }
+                }
+            }
+        }
+        binding?.let { return it }
+        throw lastFailure ?: IllegalStateException("カメラの利用可能な組み合わせが見つからへん")
+    }
+
+    private fun bindCamera(
+        provider: ProcessCameraProvider,
+        requestedQuality: CaptureQualityProfile,
+        appliedQuality: CaptureQualityProfile,
+        requestedLens: LensMode,
+        appliedLens: LensMode,
+        mimeType: String,
+        supportedMimeTypes: Set<String>,
+        thermalReason: String?,
+    ): CameraBinding {
+        val selector = cameraSelectorFor(appliedLens)
+        check(provider.hasCamera(selector)) { "${appliedLens.displayName} cameraが利用できへん" }
+        val cameraInfo = provider.getCameraInfo(selector)
+        val capabilities = Recorder.getVideoCapabilities(cameraInfo, mimeType)
+            ?: Recorder.getVideoCapabilities(cameraInfo)
+        val supportedQualities = capabilities.getSupportedQualities(DynamicRange.SDR).toSet()
+        val qualitySelector = QualitySelector.fromOrderedList(
+            qualityCandidates(appliedQuality).map(::qualityForProfile),
+            FallbackStrategy.lowerQualityOrHigherThan(Quality.SD),
+        )
+        val recorder = Recorder.Builder()
+            .setVideoCapabilitiesSource(Recorder.VIDEO_CAPABILITIES_SOURCE_CODEC_CAPABILITIES)
+            .setVideoMimeType(mimeType)
+            .setQualitySelector(qualitySelector)
+            .build()
+        val capture = VideoCapture.Builder(recorder)
+            .setTargetFrameRate(Range(appliedQuality.targetFps, appliedQuality.targetFps))
+            .build()
+        val preview = Preview.Builder().build()
+        provider.unbindAll()
+        val boundCamera = provider.bindToLifecycle(
+            this@RecordingService,
+            selector,
+            preview,
+            capture,
+        )
+        val actualQuality = capture.selectedQuality
+        val fallbackReasons = buildList {
+            thermalReason?.let(::add)
+            if (appliedQuality != requestedQuality) {
+                add("${requestedQuality.displayName} は未対応/thermal fallbackのため ${appliedQuality.displayName}")
+            }
+            if (appliedLens != requestedLens) {
+                add("${requestedLens.displayName} が未対応のため ${appliedLens.displayName} を使用")
+            }
+            if (mimeType != CaptureQualityProfile.VIDEO_MIME_HEVC) {
+                add("H.265が未対応のためH.264へfallback")
+            }
+            if (actualQuality != null && actualQuality != qualityForProfile(appliedQuality)) {
+                add("CameraXが $actualQuality を選択")
+            }
+        }.distinct().joinToString("; ").ifBlank { null }
+        return CameraBinding(
+            camera = boundCamera,
+            preview = preview,
+            capture = capture,
+            selection = CaptureSelection(
+                requestedQuality = requestedQuality,
+                appliedQuality = appliedQuality,
+                requestedLens = requestedLens,
+                appliedLens = appliedLens,
+                codecMimeType = mimeType,
+                fallbackReason = fallbackReasons,
+                supportedQualities = supportedQualities,
+                supportedMimeTypes = supportedMimeTypes,
+                actualCameraQuality = actualQuality,
+            ),
+        )
+    }
+
+    private fun cameraSelectorFor(lensMode: LensMode): CameraSelector = when (lensMode) {
+        LensMode.MAIN_1X -> CameraSelector.DEFAULT_BACK_CAMERA
+        LensMode.ULTRA_WIDE_0_5X -> CameraSelector.Builder()
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+            .addCameraFilter { infos ->
+                val focalLengths = infos.mapNotNull { info ->
+                    runCatching {
+                        Camera2CameraInfo.from(info)
+                            .getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                            ?.minOrNull()
+                            ?.let { info to it }
+                    }.getOrNull()
+                }
+                if (focalLengths.size < 2) emptyList() else listOf(focalLengths.minBy { it.second }.first)
+            }
+            .build()
+    }
+
+    private fun qualityCandidates(profile: CaptureQualityProfile): List<CaptureQualityProfile> = when (profile) {
+        CaptureQualityProfile.HIGH -> listOf(
+            CaptureQualityProfile.HIGH,
+            CaptureQualityProfile.BALANCED,
+            CaptureQualityProfile.ECO,
+        )
+        CaptureQualityProfile.BALANCED -> listOf(
+            CaptureQualityProfile.BALANCED,
+            CaptureQualityProfile.ECO,
+        )
+        CaptureQualityProfile.ECO -> listOf(CaptureQualityProfile.ECO)
+    }
+
+    private fun qualityForProfile(profile: CaptureQualityProfile): Quality = when (profile) {
+        CaptureQualityProfile.HIGH -> Quality.UHD
+        CaptureQualityProfile.BALANCED,
+        CaptureQualityProfile.ECO,
+        -> Quality.FHD
+    }
+
+    private fun applyThermalPolicyIfNeeded(thermalStatus: Int) {
+        val requestedQuality = captureSettingsStore.qualityProfile()
+        val decision = ThermalQualityPolicy.choose(requestedQuality, thermalStatus)
+        val currentSelection = _uiState.value.capture.selection
+        if (currentSelection.appliedQuality == decision.applied &&
+            currentSelection.requestedQuality == requestedQuality
+        ) return
+
+        _uiState.update {
+            it.copy(
+                capture = it.capture.copy(
+                    selection = it.capture.selection.copy(
+                        requestedQuality = requestedQuality,
+                        appliedQuality = decision.applied,
+                    ),
+                    lastQualityFallback = decision.reason,
+                ),
+            )
+        }
+        if (sessionActive && currentRecording != null && !stopRequested && !rebindForNextSegment) {
+            rebindForNextSegment = true
+            rotationJob?.cancel()
+            currentRecording?.stop()
+        } else if (!sessionActive && videoCapture != null) {
+            rebindCamera()
+        }
+    }
+
+    private fun rebindCamera(continueSession: Boolean = false) {
+        continueSessionAfterRebind = continueSession
+        cameraProvider?.unbindAll()
+        camera = null
+        previewUseCase = null
+        videoCapture = null
+        _uiState.update { it.copy(cameraReady = false) }
+        initializeCamera()
+    }
+
+    private data class CameraBinding(
+        val camera: Camera,
+        val preview: Preview,
+        val capture: VideoCapture<Recorder>,
+        val selection: CaptureSelection,
+    )
+
     private fun finishRecordingSession() {
         sessionActive = false
         stopRequested = false
         pendingStart = false
+        continueSessionAfterRebind = false
+        rebindForNextSegment = false
         rotationJob?.cancel()
         elapsedJob?.cancel()
         telemetryCollector.stop()
@@ -322,14 +624,19 @@ class RecordingService : LifecycleService() {
         cameraInitializationJob?.cancel()
         cameraProvider?.unbindAll()
         cameraProvider = null
+        camera = null
         previewUseCase = null
         videoCapture = null
+        continueSessionAfterRebind = false
+        rebindForNextSegment = false
         _uiState.update { it.copy(cameraReady = false) }
     }
 
     private fun failRecording(message: String) {
         sessionActive = false
         stopRequested = true
+        continueSessionAfterRebind = false
+        rebindForNextSegment = false
         rotationJob?.cancel()
         elapsedJob?.cancel()
         telemetryCollector.stop()

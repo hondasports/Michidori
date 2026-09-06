@@ -24,6 +24,7 @@ class TelemetryCollector(
     private val store: TelemetryStore,
 ) : SensorEventListener, LocationListener {
     private val appContext = context.applicationContext
+    private val deviceStateCollector = DeviceStateCollector(appContext)
     private val sensorManager = appContext.getSystemService(SensorManager::class.java)
     private val locationManager = appContext.getSystemService(LocationManager::class.java)
     private val timestampNormalizer = MonotonicTimestampNormalizer()
@@ -48,6 +49,8 @@ class TelemetryCollector(
         running = true
         lastLocation = null
         _uiState.value = _uiState.value.copy(gpsAvailable = false, speedKmh = null)
+        deviceStateCollector.start()
+        updateDeviceStateUi()
         startSensors()
         startLocation()
     }
@@ -57,6 +60,7 @@ class TelemetryCollector(
         running = false
         sensorManager?.unregisterListener(this)
         runCatching { locationManager?.removeUpdates(this) }
+        deviceStateCollector.stop()
         lastLocation = null
         _uiState.value = _uiState.value.copy(gpsAvailable = false, speedKmh = null)
     }
@@ -81,6 +85,7 @@ class TelemetryCollector(
             gpsAvailable = true,
             speedKmh = location.speed.takeIf { location.hasSpeed() }?.times(MPS_TO_KMH),
         )
+        updateDeviceStateUi()
         persistSample(location.elapsedRealtimeNanos.takeIf { it > 0L } ?: SystemClock.elapsedRealtimeNanos(), location.time)
     }
 
@@ -138,6 +143,7 @@ class TelemetryCollector(
         lastPersistedElapsedNs = elapsedNs
 
         val location = lastLocation
+        val deviceState = deviceStateCollector.state.value
         store.append(
             TelemetrySample(
                 elapsedNs = elapsedNs,
@@ -156,10 +162,33 @@ class TelemetryCollector(
                 rotationX = rotation?.getOrNull(0),
                 rotationY = rotation?.getOrNull(1),
                 rotationZ = rotation?.getOrNull(2),
+                batteryPercent = deviceState.batteryPercent,
+                isCharging = deviceState.isCharging,
+                batteryTemperatureC = deviceState.batteryTemperatureC,
+                thermalStatus = deviceState.thermalStatus,
+                thermalLabel = deviceState.thermalLabel,
             ),
         )
         sampleCount += 1L
-        _uiState.value = _uiState.value.copy(sampleCount = sampleCount)
+        _uiState.value = _uiState.value.copy(
+            sampleCount = sampleCount,
+            batteryPercent = deviceState.batteryPercent,
+            isCharging = deviceState.isCharging,
+            batteryTemperatureC = deviceState.batteryTemperatureC,
+            thermalStatus = deviceState.thermalStatus,
+            thermalLabel = deviceState.thermalLabel,
+        )
+    }
+
+    private fun updateDeviceStateUi() {
+        val deviceState = deviceStateCollector.state.value
+        _uiState.value = _uiState.value.copy(
+            batteryPercent = deviceState.batteryPercent,
+            isCharging = deviceState.isCharging,
+            batteryTemperatureC = deviceState.batteryTemperatureC,
+            thermalStatus = deviceState.thermalStatus,
+            thermalLabel = deviceState.thermalLabel,
+        )
     }
 
     private fun hasLocationPermission(): Boolean =

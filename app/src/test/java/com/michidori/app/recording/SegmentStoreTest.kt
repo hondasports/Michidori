@@ -74,6 +74,30 @@ class SegmentStoreTest {
         assertTrue(reloaded.newSegmentFile("segment-2").exists())
     }
 
+    @Test
+    fun segmentCaptureMetadataSurvivesReload() {
+        val store = SegmentStore(root, maxRetainedSegments = 3)
+        val id = "metadata-segment"
+        store.newSegmentFile(id).writeText("video")
+        store.addFinalizedSegment(
+            RecordingSegment(
+                id = id,
+                fileName = "clip_$id.mp4",
+                startElapsedNs = 0L,
+                endElapsedNs = 1_000L,
+                qualityProfile = CaptureQualityProfile.HIGH.id,
+                codecMimeType = CaptureQualityProfile.VIDEO_MIME_HEVC,
+                lensMode = LensMode.ULTRA_WIDE_0_5X.id,
+            ),
+        )
+
+        val reloaded = SegmentStore(root).listSegments().single()
+
+        assertEquals(CaptureQualityProfile.HIGH.id, reloaded.qualityProfile)
+        assertEquals(CaptureQualityProfile.VIDEO_MIME_HEVC, reloaded.codecMimeType)
+        assertEquals(LensMode.ULTRA_WIDE_0_5X.id, reloaded.lensMode)
+    }
+
     private fun segment(id: String, index: Int): RecordingSegment = RecordingSegment(
         id = id,
         fileName = "clip_$id.mp4",

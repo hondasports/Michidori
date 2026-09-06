@@ -48,6 +48,11 @@ private fun TelemetrySample.toJsonLine(): String {
         append(",\"rotation\":[")
         append(rotationX.json()).append(',').append(rotationY.json()).append(',').append(rotationZ.json())
         append(']')
+        append(",\"batteryPercent\":").append(batteryPercent.json())
+        append(",\"isCharging\":").append(isCharging?.toString() ?: "null")
+        append(",\"batteryTemperatureC\":").append(batteryTemperatureC.json())
+        append(",\"thermalStatus\":").append(thermalStatus?.toString() ?: "null")
+        append(",\"thermalLabel\":").append(thermalLabel?.let { "\"${it.replace("\\", "\\\\").replace("\"", "\\\"")}\"" } ?: "null")
         append('}')
     }
 }

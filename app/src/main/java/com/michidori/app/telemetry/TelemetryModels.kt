@@ -17,6 +17,11 @@ data class TelemetrySample(
     val rotationX: Float? = null,
     val rotationY: Float? = null,
     val rotationZ: Float? = null,
+    val batteryPercent: Float? = null,
+    val isCharging: Boolean? = null,
+    val batteryTemperatureC: Float? = null,
+    val thermalStatus: Int? = null,
+    val thermalLabel: String? = null,
 )
 
 data class TelemetryUiState(
@@ -24,6 +29,11 @@ data class TelemetryUiState(
     val speedKmh: Float? = null,
     val sensorsAvailable: Boolean = false,
     val sampleCount: Long = 0L,
+    val batteryPercent: Float? = null,
+    val isCharging: Boolean = false,
+    val batteryTemperatureC: Float? = null,
+    val thermalStatus: Int = 0,
+    val thermalLabel: String = "NONE",
 )
 
 class MonotonicTimestampNormalizer(initial: Long? = null) {

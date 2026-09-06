@@ -100,6 +100,8 @@ class MainActivity : ComponentActivity() {
                     onStartRecording = { boundService?.startRecording() },
                     onStopRecording = { boundService?.stopRecording() },
                     onSaveEvent = { boundService?.saveManualEvent() },
+                    onSetQualityProfile = { boundService?.setQualityProfile(it) },
+                    onSetLensMode = { boundService?.setLensMode(it) },
                 )
             }
         }
@@ -156,6 +158,8 @@ private fun MichidoriApp(
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onSaveEvent: () -> Unit,
+    onSetQualityProfile: (com.michidori.app.recording.CaptureQualityProfile) -> Unit,
+    onSetLensMode: (com.michidori.app.recording.LensMode) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -187,6 +191,8 @@ private fun MichidoriApp(
                 onStartRecording = onStartRecording,
                 onStopRecording = onStopRecording,
                 onSaveEvent = onSaveEvent,
+                onSetQualityProfile = onSetQualityProfile,
+                onSetLensMode = onSetLensMode,
             )
         }
     }
@@ -240,6 +246,8 @@ private fun RecordingDashboard(
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onSaveEvent: () -> Unit,
+    onSetQualityProfile: (com.michidori.app.recording.CaptureQualityProfile) -> Unit,
+    onSetLensMode: (com.michidori.app.recording.LensMode) -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -253,6 +261,11 @@ private fun RecordingDashboard(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
+        )
+        CaptureSettingsRow(
+            state = state,
+            onSetQualityProfile = onSetQualityProfile,
+            onSetLensMode = onSetLensMode,
         )
         StatusSummary(state)
         ControlRow(
@@ -364,6 +377,55 @@ private fun StatusSummary(state: RecordingUiState) {
             SummaryItem("PROTECTED", "${state.protectedSegmentCount}")
             SummaryItem("TELEMETRY", "${state.telemetrySampleCount}")
         }
+        Text(
+            text = "${state.capture.selection.appliedQuality.displayName} · ${state.capture.selection.appliedLens.displayName} · ${codecLabel(state.capture.selection.codecMimeType)}",
+            color = MichidoriColors.textSecondary,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+        )
+        Text(
+            text = deviceStatusLabel(state),
+            color = MichidoriColors.textMuted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+        )
+        Spacer(Modifier.height(10.dp))
+    }
+}
+
+@Composable
+private fun CaptureSettingsRow(
+    state: RecordingUiState,
+    onSetQualityProfile: (com.michidori.app.recording.CaptureQualityProfile) -> Unit,
+    onSetLensMode: (com.michidori.app.recording.LensMode) -> Unit,
+) {
+    val selection = state.capture.selection
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        OutlinedButton(
+            onClick = { onSetQualityProfile(nextQuality(selection.requestedQuality)) },
+            enabled = !state.isRecording,
+            modifier = Modifier.weight(1f),
+        ) {
+            Text("画質\n${selection.requestedQuality.displayName}", textAlign = TextAlign.Center, lineHeight = 16.sp)
+        }
+        OutlinedButton(
+            onClick = { onSetLensMode(nextLens(selection.requestedLens)) },
+            enabled = !state.isRecording,
+            modifier = Modifier.weight(0.6f),
+        ) {
+            Text("レンズ\n${selection.requestedLens.displayName}", textAlign = TextAlign.Center, lineHeight = 16.sp)
+        }
+    }
+    selection.fallbackReason?.let { reason ->
+        Text(
+            text = reason,
+            color = MichidoriColors.warning,
+            fontSize = 11.sp,
+            lineHeight = 15.sp,
+        )
     }
 }
 
@@ -433,6 +495,29 @@ private fun recordingLabel(status: RecordingStatus): String = when (status) {
 private fun formatElapsed(elapsedMs: Long): String {
     val totalSeconds = (elapsedMs / 1_000L).coerceAtLeast(0L)
     return String.format(Locale.US, "%02d:%02d", totalSeconds / 60L, totalSeconds % 60L)
+}
+
+private fun deviceStatusLabel(state: RecordingUiState): String {
+    val battery = state.capture.batteryPercent?.let { String.format(Locale.US, "%.0f%%", it) } ?: "--"
+    val charging = if (state.capture.isCharging) " ⚡" else ""
+    val temperature = state.capture.batteryTemperatureC?.let { String.format(Locale.US, " · %.1f°C", it) } ?: ""
+    return "THERMAL ${state.capture.thermalLabel} · BATTERY $battery$charging$temperature"
+}
+
+private fun nextQuality(current: com.michidori.app.recording.CaptureQualityProfile): com.michidori.app.recording.CaptureQualityProfile {
+    val values = com.michidori.app.recording.CaptureQualityProfile.entries
+    return values[(values.indexOf(current) + 1) % values.size]
+}
+
+private fun nextLens(current: com.michidori.app.recording.LensMode): com.michidori.app.recording.LensMode {
+    val values = com.michidori.app.recording.LensMode.entries
+    return values[(values.indexOf(current) + 1) % values.size]
+}
+
+private fun codecLabel(mimeType: String): String = when (mimeType) {
+    com.michidori.app.recording.CaptureQualityProfile.VIDEO_MIME_HEVC -> "H.265"
+    com.michidori.app.recording.CaptureQualityProfile.VIDEO_MIME_AVC -> "H.264"
+    else -> mimeType.substringAfterLast('/').uppercase(Locale.US)
 }
 
 private object MichidoriColors {

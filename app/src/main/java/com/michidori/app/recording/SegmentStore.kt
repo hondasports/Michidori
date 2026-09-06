@@ -124,11 +124,14 @@ class SegmentStore(
         segment.startElapsedNs.toString(),
         segment.endElapsedNs.toString(),
         segment.isProtected.toString(),
+        segment.qualityProfile.orEmpty(),
+        segment.codecMimeType.orEmpty(),
+        segment.lensMode.orEmpty(),
     ).joinToString("\t")
 
     private fun decode(line: String): RecordingSegment? {
         val fields = line.split('\t')
-        if (fields.size != 5) return null
+        if (fields.size != 5 && fields.size != 8) return null
         return runCatching {
             RecordingSegment(
                 id = fields[0],
@@ -136,6 +139,9 @@ class SegmentStore(
                 startElapsedNs = fields[2].toLong(),
                 endElapsedNs = fields[3].toLong(),
                 isProtected = fields[4].toBooleanStrict(),
+                qualityProfile = fields.getOrNull(5)?.takeIf { it.isNotBlank() },
+                codecMimeType = fields.getOrNull(6)?.takeIf { it.isNotBlank() },
+                lensMode = fields.getOrNull(7)?.takeIf { it.isNotBlank() },
             )
         }.getOrNull()
     }
