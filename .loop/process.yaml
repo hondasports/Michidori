@@ -1,0 +1,162 @@
+version: 1
+name: michidori-agent-loop
+entrypoint: AGENTS.md
+entry_state: prepare
+default_base_branch: main
+
+principles:
+  - Acceptance CriteriaとEvidenceで品質を証明する
+  - Spec ConfidenceとRiskを分離する
+  - shared diffのwriterは原則1体
+  - same-content Evidenceを再利用する
+  - PR作成はcheckpointとする
+  - stage間はcompact contractを引き継ぐ
+  - EmulatorとPixel実機の責務を分離する
+  - 録画継続性をAI/Depthより優先する
+
+specification_confidence:
+  c2_confirmed:
+    implementation_allowed: true
+  c1_reconstructed:
+    implementation_allowed: true
+  c0_unclear:
+    implementation_allowed: false
+  c0_conflicted:
+    implementation_allowed: false
+
+risk_model:
+  axes:
+    blast_radius: [local, several_surfaces, shared_or_system_wide]
+    data_privacy: [none, local_sensitive, external_boundary]
+    reversibility: [easy, procedural_rollback, difficult_or_stateful]
+    hardware_uncertainty: [known, some_unknowns, device_dependent]
+  levels: [r0_trivial, r1_low, r2_medium, r3_high, r4_critical]
+  r4_triggers:
+    - destructive_recording_retention_change_with_data_loss_risk
+    - privacy_boundary_change_for_video_or_location
+    - irreversible_external_write
+    - credential_or_secret_rotation
+
+requirements:
+  id_prefixes:
+    acceptance_criteria: AC
+    invariant: IV
+    test_case: TC
+  relevant_dimensions:
+    - happy_path
+    - boundary
+    - error_failure
+    - persistence_state_transition
+    - lifecycle_background
+    - storage_retention
+    - permission_privacy
+    - device_capability
+    - performance_thermal
+    - timestamp_synchronization
+  coverage:
+    forward: 全ACとrelevant IVにTCまたはNOT_REQUIRED理由を持つ
+    reverse: 全behavior-changing diffをAC/IV/approved deviationへ対応させる
+
+controls:
+  privacy_review:
+    trigger_when:
+      - video_or_location_external_transfer
+      - sharing_or_export_behavior
+  recording_integrity:
+    trigger_when:
+      - segment_rotation
+      - ring_retention
+      - protected_clip_behavior
+      - foreground_recording_lifecycle
+    requires:
+      - failure_path
+      - retention_or_recovery_evidence
+  hardware_verification:
+    trigger_when:
+      - camera_quality_or_codec
+      - prolonged_recording
+      - thermal_or_battery
+      - actual_sensor_behavior
+      - arcore_depth
+      - aicore_gemini_nano
+    device: Pixel 10 Pro
+  human_gate:
+    trigger_when:
+      - unresolved_material_choice
+      - irreversible_write
+      - external_sensitive_data_write
+      - protected_finding_accept
+
+loop:
+  default_path:
+    - prepare
+    - implementation
+    - verification
+    - review_if_required
+    - delivery
+    - pr_aftercare
+    - done
+
+prepare:
+  produces:
+    - goal
+    - in_scope
+    - out_of_scope
+    - task_type
+    - complexity
+    - route
+    - spec_confidence
+    - acceptance_criteria
+    - invariants
+    - assumptions
+    - risk
+    - required_controls
+    - coverage_map
+    - verification_plan
+    - emulator_vs_pixel_plan
+
+implementation:
+  rules:
+    - compact contractに必要な最小差分だけ変更する
+    - 新しいpermission/background/hardware/persistence影響を見つけたらPREPAREをdelta更新する
+    - AI/Depth失敗で録画本体を不要に停止させない
+
+verification:
+  execution_order:
+    - cheap_static_compile
+    - targeted_unit_contract
+    - emulator_functional
+    - emulator_gps_sensor_injection
+    - pixel_targeted_when_hardware_dependent
+    - pixel_prolonged_when_recording_or_performance_changed
+    - ci_aftercare
+  rules:
+    - material failure後に高コスト検証を続行しない
+    - 同一内容のfull checkを理由なく繰り返さない
+    - Emulatorで証明できるbehaviorを毎回Pixelへ広げない
+    - Pixel依存behaviorをEmulatorだけでPASSにしない
+    - required environment不足はBLOCKEDとして扱う
+
+review:
+  default_independent_reviewers: 1
+  omission_scan:
+    - contract_without_implementation_or_evidence
+    - diff_without_contract_mapping
+    - missing_failure_or_degraded_path
+    - ring_retention_regression
+    - timestamp_sync_regression
+    - privacy_boundary_expansion
+    - scope_creep
+
+delivery:
+  target: merge_ready_pr
+  allow_direct_main_edit: false
+
+done:
+  requires:
+    - implementation_allowed_spec_confidence
+    - forward_and_reverse_coverage
+    - required_verification_complete
+    - required_review_complete
+    - no_blocking_finding
+    - delivery_target_reached
