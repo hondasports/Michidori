@@ -1,0 +1,118 @@
+version: 1
+name: michidori-agent-os
+entrypoint: AGENTS.md
+
+instruction_priority:
+  - platform_and_non_bypassable_safety
+  - current_explicit_user_instruction
+  - latest_explicitly_approved_spec_or_decision
+  - agents_and_loop_contract
+  - task_state
+  - explanatory_docs
+
+request_classification:
+  effects:
+    - read_only
+    - reversible_repo_write
+    - emulator_execution
+    - device_execution
+    - external_write
+    - irreversible_write
+  task_types:
+    - docs
+    - android_ui
+    - recording
+    - telemetry
+    - event_detection
+    - vision_ml
+    - depth
+    - ai
+    - build_ci
+    - refactor
+  complexity:
+    tiny:
+      route: fast
+    small:
+      route: fast
+    medium:
+      route: standard
+    large:
+      route: deep
+
+routes:
+  read_only:
+    stages: [prepare, verify, deliver]
+    independent_review: false
+  fast:
+    stages: [prepare, implementation, verification, delivery, pr_aftercare]
+    independent_review: false_unless_control_requires
+  standard:
+    stages: [prepare, implementation, verification, review, delivery, pr_aftercare]
+    independent_review: once
+  deep:
+    stages: [prepare, implementation, verification, review, delivery, pr_aftercare]
+    independent_review: once
+
+routing_rules:
+  - write effectなしの調査はread_onlyを選ぶ
+  - tiny/smallかつlow riskでdistinct controlなしならfastを選ぶ
+  - mediumまたはindependent reviewが必要ならstandardを選ぶ
+  - large/cross-cutting/multiple hardware boundariesならdeepを選ぶ
+  - route変更でloop全体をrestartせずaffected stageだけ再実行する
+  - R4分類だけを理由にHuman Gateを起動しない
+
+roles:
+  root:
+    responsibilities:
+      - contract統合
+      - shared diff ownership
+      - finding統合
+      - delivery判断
+  reviewer:
+    max_default: 1
+    use_when:
+      - required_control
+      - medium_or_higher_risk
+      - independent_coverage_materially_improves_quality
+  device_verifier:
+    use_when:
+      - camera_hardware_behavior
+      - thermal_or_battery
+      - actual_gps_or_imu
+      - arcore_depth
+      - aicore_or_gemini_nano
+
+human_gate:
+  trigger_when:
+    - unresolved_material_choice_after_authorized_discovery
+    - production_or_irreversible_write
+    - secret_or_credential_rotation
+    - protected_finding_accept
+  not_triggered_by:
+    - branch_creation
+    - reversible_repo_change
+    - emulator_execution
+    - requested_pr_create_or_update
+    - pixel_test_that_does_not_mutate_external_state
+
+context_policy:
+  source_of_truth: .loop/state/<task-id>.yaml
+  compact_handoff:
+    - goal
+    - scope
+    - task_type
+    - complexity
+    - route
+    - acceptance_criteria
+    - invariants
+    - assumptions
+    - risk
+    - controls
+    - coverage_map
+    - findings
+    - revision
+  rules:
+    - stageごとにIssue全文やchat履歴を再要約しない
+    - authoritative sourceは参照だけ保持する
+    - same-content evidenceを再利用する
+    - hardware-dependent assertionだけ必要に応じPixel evidenceへ昇格する
