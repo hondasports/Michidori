@@ -1,0 +1,96 @@
+task_id: null
+revision: 0
+status: prepare
+
+goal: null
+scope:
+  in: []
+  out: []
+
+task:
+  type: null
+  complexity: null
+  route: null
+  effects: []
+
+spec:
+  confidence: null
+  authoritative_sources: []
+  assumptions: []
+
+acceptance_criteria: []
+invariants: []
+
+relevance_dimensions:
+  happy_path: null
+  boundary: null
+  error_failure: null
+  persistence_state_transition: null
+  lifecycle_background: null
+  storage_retention: null
+  permission_privacy: null
+  device_capability: null
+  performance_thermal: null
+  timestamp_synchronization: null
+
+risk:
+  initial: null
+  current: null
+  max_observed: null
+  reasons: []
+
+required_controls: []
+
+coverage_map: []
+# Example:
+# - contract_id: AC01
+#   implementation_surfaces: []
+#   verification_cases: [TC01]
+#   status: planned
+
+verification_cases: []
+# - id: TC01
+#   environment: emulator | pixel_10_pro | static | ci
+#   command_or_scenario: null
+#   expected: null
+#   actual: null
+#   status: pending
+
+emulator_vs_pixel:
+  emulator_required: []
+  pixel_required: []
+  pixel_not_required_reason: null
+
+findings: []
+# - id: F01
+#   severity: null
+#   summary: null
+#   status: open
+#   protected: false
+
+changes:
+  files: []
+  behavior_mapping: []
+
+telemetry:
+  stages: {}
+  counters:
+    source_reads: 0
+    changed_files: 0
+    test_case_count: 0
+    findings_added: 0
+    retries: 0
+    review_cycles: 0
+
+review:
+  required: false
+  status: not_required
+  evidence: []
+
+delivery:
+  target: merge_ready_pr
+  branch: null
+  pr: null
+  status: pending
+
+learning_event: none
