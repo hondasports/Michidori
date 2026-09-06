@@ -23,8 +23,37 @@ Inspect logcat / files / DB / screenshots
   ↓
 VERIFY
   ↓
-Fix only observed gaps
+Commit logical change
+  ↓
+Push main
+  ↓
+Next slice
 ```
+
+## Delivery model
+
+通常開発では task branch / PR を作らず、`main` へ直接 commit / push する。
+
+速度を上げる代わりに、`main` を壊さないため commit boundary を明確にする。
+
+- 1 commit = 1 logical change
+- required Verification を通した単位だけ commit / push
+- unrelated change を同じcommitへ混ぜない
+- 大きな機能は end-to-end で意味のある小さな縦切りへ分割
+- compile / test failure を含む途中状態は push しない
+- 次のsliceへ進む前に current slice を完了状態にする
+- PR は明示依頼、direct main が禁止されている場合、外部レビューが必要な場合だけ使う
+
+例:
+
+```text
+feat(recording): scaffold CameraX recording
+feat(recording): add segment rotation
+feat(telemetry): persist monotonic timestamps
+feat(event): protect clips on manual save
+```
+
+巨大な `feat: implement dashcam` 1 commit にまとめない。
 
 ## Emulator responsibilities
 
@@ -85,6 +114,7 @@ Fix only observed gaps
 5. Emulator injected GPS / IMU scenarios
 6. Pixel targeted scenario
 7. prolonged Pixel run when recording or performance behavior changed
+8. commit and push current logical slice to `main`
 
 高コストな実機長時間検証は、関連しない docs/UI-only 変更では要求しない。
 
