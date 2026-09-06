@@ -1,4 +1,4 @@
-# Michidori Agent Loop v1
+# Michidori Agent Loop v2
 
 このファイルは常時 context に置く最小の実行契約だけを持つ。詳細を重複させない。
 
@@ -27,8 +27,11 @@
 ## Default loop
 
 ```text
-PREPARE → IMPLEMENT → VERIFY → REVIEW? → DELIVER → PR AFTERCARE → DONE
+PREPARE → IMPLEMENT → VERIFY → REVIEW? → COMMIT & PUSH → DONE
 ```
+
+通常の開発では `main` を直接更新する。task branch / PR はデフォルトでは作らない。
+PR はユーザーが明示的に要求した場合、外部レビューが必要な場合、または direct main が技術的に禁止されている場合だけ使う。
 
 Android の実装変更では VERIFY を次の fail-fast 順で考える。
 
@@ -39,22 +42,23 @@ cheap static / compile
 → GPS / sensor injected scenario
 → Pixel targeted verification when hardware-dependent
 → prolonged Pixel run when recording/performance changed
-→ CI aftercare
+→ commit & push
 ```
 
 ## Core invariants
 
 - `C0 unclear / conflicted` のまま Implementation へ進まない。
-- repository変更は `main` を直接編集せず task branch で行う。
+- `main` へ直接 commit / push してよい。ただし required Verification が PASS する前に壊れた状態を push しない。
+- commit は1つの論理変更に揃え、無関係な修正を混ぜない。
+- 大きなtaskは検証可能な小さな縦切りへ分割し、各単位を完了させてから次へ進む。
 - same shared diff の writer は原則1体。
 - Acceptance Criteria は `ACxx`、Preserve / Invariant は `IVxx`、Verification case は `TCxx` で参照する。
 - 全 AC / relevant IV に Evidence または明示 NOT_REQUIRED 理由を持たせる。
 - behavior-changing diff は AC / IV / approved design deviation のいずれかへ逆引きできること。
 - Risk と Required Controls を分離する。
-- required Verification / Review が FAIL・BLOCKED のまま Delivery へ進まない。
+- required Verification / Review が FAIL・BLOCKED のまま commit / push しない。
 - 同じ tree/content の Evidence は再利用し、content delta だけ再検証する。
-- `PR created` は checkpoint。通常 target は latest PR content の `merge_ready`。
-- scope外改善を同じPRへ勝手に混ぜない。
+- scope外改善を同じcommitへ勝手に混ぜない。
 - Emulator で証明可能なものを毎回 Pixel 実機へ広げない。
 - Pixel依存の camera / thermal / Depth / AICore 特性を Emulator の結果だけで断定しない。
 
@@ -95,12 +99,11 @@ Issue全文、chat履歴、source本文を各stageで再要約しない。
 
 例:
 
-- branch作成
 - code / docs修正
 - tests
 - Emulator検証
 - review / fix
-- 同一taskのPR作成・更新
+- `main` への検証済みcommit / push
 
 Human Gate は production / irreversible operation、credential rotation、protected finding acceptance、または authorized discovery 後も実装結果を materially 変える選択肢が残る場合に限定する。
 
@@ -117,12 +120,15 @@ Human Gate は production / irreversible operation、credential rotation、prote
 - Risk / Required Controls
 - Coverage Map / TC
 - Emulator / Pixel の検証分担
+- commit boundary
 
 ## IMPLEMENT
 
 compact contract に必要な最小差分を実装する。
 
 新しい camera capability、permission、persistent data、background execution、hardware dependency が見つかったら暗黙に scope 拡大せず PREPARE を delta 更新する。
+
+大きな変更は、独立して検証・commit可能な縦切りに分ける。途中状態だけを保存するためのcommitは作らない。
 
 ## VERIFY
 
@@ -146,6 +152,14 @@ compact contract に必要な最小差分を実装する。
 - recording retention / telemetry sync を壊している
 - scope外 behavior が混入している
 
+## COMMIT & PUSH
+
+- required Verification / Review が完了してから `main` へ commit / push する。
+- 1 commit = 1 logical change を基本にする。
+- commit message は変更意図が分かる conventional style を優先する。
+- 次の論理変更に入る前に current commit を完了状態へする。
+- PR は通常作らない。必要な場合だけ明示的に route を切り替える。
+
 ## Safety invariants
 
 - secret値を表示・送信・commitしない。
@@ -162,5 +176,5 @@ compact contract に必要な最小差分を実装する。
 - forward / reverse coverage 成立
 - required Verification / Review 完了
 - blocking finding なし
-- Delivery target 到達
+- logical commit が `main` に push 済み
 - Pixel required / not required の判断根拠あり
