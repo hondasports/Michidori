@@ -1,4 +1,4 @@
-version: 1
+version: 2
 name: michidori-agent-os
 entrypoint: AGENTS.md
 
@@ -44,13 +44,13 @@ routes:
     stages: [prepare, verify, deliver]
     independent_review: false
   fast:
-    stages: [prepare, implementation, verification, delivery, pr_aftercare]
+    stages: [prepare, implementation, verification, commit_and_push]
     independent_review: false_unless_control_requires
   standard:
-    stages: [prepare, implementation, verification, review, delivery, pr_aftercare]
+    stages: [prepare, implementation, verification, review, commit_and_push]
     independent_review: once
   deep:
-    stages: [prepare, implementation, verification, review, delivery, pr_aftercare]
+    stages: [prepare, implementation, verification, review, commit_and_push]
     independent_review: once
 
 routing_rules:
@@ -60,6 +60,7 @@ routing_rules:
   - large/cross-cutting/multiple hardware boundariesならdeepを選ぶ
   - route変更でloop全体をrestartせずaffected stageだけ再実行する
   - R4分類だけを理由にHuman Gateを起動しない
+  - task branchやPRを通常routeへ追加しない
 
 roles:
   root:
@@ -67,6 +68,7 @@ roles:
       - contract統合
       - shared diff ownership
       - finding統合
+      - commit boundary判断
       - delivery判断
   reviewer:
     max_default: 1
@@ -89,11 +91,20 @@ human_gate:
     - secret_or_credential_rotation
     - protected_finding_accept
   not_triggered_by:
-    - branch_creation
     - reversible_repo_change
+    - direct_main_commit_after_verification
     - emulator_execution
-    - requested_pr_create_or_update
     - pixel_test_that_does_not_mutate_external_state
+
+repository_delivery:
+  default_branch: main
+  direct_main: true
+  branch_by_default: false
+  pull_request_by_default: false
+  pull_request_only_when:
+    - explicit_user_request
+    - direct_main_technically_blocked
+    - external_review_is_required
 
 context_policy:
   source_of_truth: .loop/state/<task-id>.yaml
@@ -111,6 +122,7 @@ context_policy:
     - coverage_map
     - findings
     - revision
+    - commit_boundary
   rules:
     - stageごとにIssue全文やchat履歴を再要約しない
     - authoritative sourceは参照だけ保持する
