@@ -1,6 +1,7 @@
 package com.michidori.app.vision
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.os.SystemClock
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -15,6 +16,7 @@ import java.util.concurrent.Executors
 class VisionAnalyzer(
     private val onResult: (VisionFrameResult) -> Unit,
     private val onStatus: (VisionStatus, String) -> Unit,
+    private val liteRtDetector: LiteRtObjectDetector? = null,
     private val minIntervalNs: Long = DEFAULT_MIN_INTERVAL_NS,
 ) : ImageAnalysis.Analyzer, AutoCloseable {
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -47,23 +49,45 @@ class VisionAnalyzer(
         if (detector == null) onStatus(VisionStatus.UNAVAILABLE, "ML Kit object detectorを初期化できへん")
     }
 
+    /**
+     * Recording-time vision path: some devices stop delivering ImageAnalysis
+     * frames while the video session is active, so the caller taps the live
+     * preview surface (main-thread `PreviewView.getBitmap`) and hands the
+     * bitmap here. Takes ownership of the bitmap.
+     */
+    fun analyzePreviewFrame(bitmap: Bitmap, elapsedNs: Long) {
+        executor.execute {
+            if (!enabled) {
+                bitmap.recycle()
+                return@execute
+            }
+            liteRtDetector?.submit(bitmap, elapsedNs)
+            val input = runCatching { InputImage.fromBitmap(bitmap, 0) }.getOrElse {
+                bitmap.recycle()
+                onStatus(VisionStatus.DEGRADED, "ML Kit入力画像を作れへん")
+                return@execute
+            }
+            runMlKit(input, elapsedNs, bitmap.width, bitmap.height) { bitmap.recycle() }
+        }
+    }
+
     override fun analyze(image: ImageProxy) {
         if (!enabled) {
             image.close()
             return
         }
-        val mediaImage = image.image
         val elapsedNs = image.imageInfo.timestamp.takeIf { it > 0L } ?: SystemClock.elapsedRealtimeNanos()
-        if (mediaImage == null || detector == null) {
-            image.close()
-            return
-        }
         if (elapsedNs - lastAcceptedElapsedNs < minIntervalNs) {
             image.close()
             return
         }
         lastAcceptedElapsedNs = elapsedNs
-        val startedNs = SystemClock.elapsedRealtimeNanos()
+
+        val mediaImage = image.image
+        if (mediaImage == null) {
+            image.close()
+            return
+        }
         val input = runCatching {
             InputImage.fromMediaImage(mediaImage, image.imageInfo.rotationDegrees)
         }.getOrElse {
@@ -71,7 +95,22 @@ class VisionAnalyzer(
             onStatus(VisionStatus.DEGRADED, "ML Kit入力画像を作れへん")
             return
         }
-        detector.process(input)
+        runMlKit(input, elapsedNs, image.width, image.height) { image.close() }
+    }
+
+    private fun runMlKit(
+        input: InputImage,
+        elapsedNs: Long,
+        frameWidth: Int,
+        frameHeight: Int,
+        onComplete: () -> Unit,
+    ) {
+        val activeDetector = detector ?: run {
+            onComplete()
+            return
+        }
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        activeDetector.process(input)
             .addOnSuccessListener { detectedObjects ->
                 val observations = detectedObjects.map { detectedObject ->
                     val label = detectedObject.labels.maxByOrNull { it.confidence }
@@ -84,8 +123,8 @@ class VisionAnalyzer(
                         top = bounds.top.toFloat(),
                         right = bounds.right.toFloat(),
                         bottom = bounds.bottom.toFloat(),
-                        frameWidth = image.width,
-                        frameHeight = image.height,
+                        frameWidth = frameWidth,
+                        frameHeight = frameHeight,
                         elapsedNs = elapsedNs,
                     )
                 }
@@ -102,7 +141,7 @@ class VisionAnalyzer(
                 onStatus(VisionStatus.DEGRADED, "ML Kit推論が一時的に失敗")
             }
             .addOnCompleteListener {
-                image.close()
+                onComplete()
             }
     }
 

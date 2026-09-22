@@ -22,10 +22,12 @@ class VisionStore(private val root: File) {
                 "\"frameWidth\":${objectValue.frameWidth},\"frameHeight\":${objectValue.frameHeight}" +
                 "}"
         }
+        val statusMessage = frame.statusMessage?.let { ",\"statusMessage\":\"${it.escapeJson()}\"" } ?: ""
         val line = "{" +
             "\"elapsedNs\":${frame.elapsedNs}," +
+            "\"engine\":\"${frame.engine}\"," +
             "\"inferenceMs\":${frame.inferenceMs}," +
-            "\"status\":\"${frame.status}\"," +
+            "\"status\":\"${frame.status}\"$statusMessage," +
             "\"objects\":[$objects]" +
             "}\n"
         file.appendText(line, StandardCharsets.UTF_8)

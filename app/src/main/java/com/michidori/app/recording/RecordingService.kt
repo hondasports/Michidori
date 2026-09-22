@@ -48,6 +48,7 @@ import com.michidori.app.events.MotionEventCandidate
 import com.michidori.app.telemetry.TelemetryCollector
 import com.michidori.app.telemetry.TelemetryStore
 import com.michidori.app.vision.DetectedObjectObservation
+import com.michidori.app.vision.LiteRtObjectDetector
 import com.michidori.app.vision.LiteRtTrafficModelRunner
 import com.michidori.app.vision.TtcEstimator
 import com.michidori.app.vision.TtcEstimate
@@ -90,6 +91,7 @@ class RecordingService : LifecycleService() {
     private lateinit var ttcStore: com.michidori.app.vision.TtcStore
     private lateinit var trafficStore: TrafficStore
     private lateinit var visionAnalyzer: VisionAnalyzer
+    private lateinit var liteRtObjectDetector: LiteRtObjectDetector
     private lateinit var trafficModelRunner: LiteRtTrafficModelRunner
     private lateinit var depthProvider: ArCoreDepthProvider
     private val ttcEstimator = TtcEstimator()
@@ -100,9 +102,11 @@ class RecordingService : LifecycleService() {
     private var videoCapture: VideoCapture<Recorder>? = null
     private var imageAnalysis: ImageAnalysis? = null
     private var previewSurfaceProvider: Preview.SurfaceProvider? = null
+    private var previewBitmapView: PreviewView? = null
     private var cameraInitializationJob: Job? = null
     private var rotationJob: Job? = null
     private var elapsedJob: Job? = null
+    private var frameTapJob: Job? = null
     private var currentRecording: Recording? = null
     private var currentSegmentId: String? = null
     private var currentSegmentFile: File? = null
@@ -133,9 +137,12 @@ class RecordingService : LifecycleService() {
         depthStore = com.michidori.app.depth.DepthStore(recordingsRoot)
         ttcStore = com.michidori.app.vision.TtcStore(recordingsRoot)
         trafficStore = TrafficStore(recordingsRoot)
+        liteRtObjectDetector = LiteRtObjectDetector(this)
+        liteRtObjectDetector.onFrameResult = ::onVisionFrame
         visionAnalyzer = VisionAnalyzer(
             onResult = ::onVisionFrame,
             onStatus = ::onVisionStatus,
+            liteRtDetector = liteRtObjectDetector,
         )
         trafficModelRunner = LiteRtTrafficModelRunner(this)
         depthProvider = ArCoreDepthProvider(
@@ -151,6 +158,7 @@ class RecordingService : LifecycleService() {
                 vision = it.vision.copy(
                     status = if (visionAnalyzer.initiallyAvailable) VisionStatus.READY else VisionStatus.UNAVAILABLE,
                     statusMessage = visionAnalyzer.initialStatusMessage,
+                    litertStatusMessage = liteRtObjectDetector.statusMessage,
                 ),
                 trafficModelStatus = trafficModelRunner.status.name,
                 trafficModelMessage = trafficModelRunner.statusMessage,
@@ -207,12 +215,14 @@ class RecordingService : LifecycleService() {
 
     fun attachPreview(previewView: PreviewView) {
         previewSurfaceProvider = previewView.surfaceProvider
+        previewBitmapView = previewView
         if (videoCapture == null) initializeCamera()
         previewUseCase?.setSurfaceProvider(previewSurfaceProvider)
     }
 
     fun detachPreview() {
         previewSurfaceProvider = null
+        previewBitmapView = null
         if (!sessionActive) releaseCamera()
     }
 
@@ -383,6 +393,17 @@ class RecordingService : LifecycleService() {
     private fun onVisionFrame(frame: VisionFrameResult) {
         if (!sessionActive) return
         visionStore.append(frame)
+        if (frame.engine == VisionFrameResult.ENGINE_LITERT) {
+            _uiState.update {
+                it.copy(
+                    vision = it.vision.copy(
+                        litertStatusMessage = frame.statusMessage,
+                        litertObjectCount = frame.objects.size,
+                    ),
+                )
+            }
+            return
+        }
         _uiState.update {
             it.copy(
                 vision = it.vision.copy(
@@ -490,6 +511,17 @@ class RecordingService : LifecycleService() {
         ttcEstimator.reset()
         telemetryCollector.start()
         visionAnalyzer.setEnabled(true)
+        frameTapJob = lifecycleScope.launch {
+            while (isActive && sessionActive) {
+                // PreviewView.getBitmap() must run on the main thread; it taps the
+                // TextureView frame which stays live while the video session runs.
+                val bitmap = runCatching { previewBitmapView?.bitmap }.getOrNull()
+                if (bitmap != null) {
+                    visionAnalyzer.analyzePreviewFrame(bitmap, SystemClock.elapsedRealtimeNanos())
+                }
+                delay(FRAME_TAP_INTERVAL_MS)
+            }
+        }
         depthProvider.start()
         _uiState.update { it.copy(status = RecordingStatus.RECORDING, elapsedMs = 0L, lastError = null) }
         elapsedJob?.cancel()
@@ -930,6 +962,7 @@ class RecordingService : LifecycleService() {
         rebindForNextSegment = false
         rotationJob?.cancel()
         elapsedJob?.cancel()
+        frameTapJob?.cancel()
         telemetryCollector.stop()
         visionAnalyzer.setEnabled(false)
         depthProvider.stop()
@@ -961,6 +994,7 @@ class RecordingService : LifecycleService() {
         rebindForNextSegment = false
         rotationJob?.cancel()
         elapsedJob?.cancel()
+        frameTapJob?.cancel()
         telemetryCollector.stop()
         visionAnalyzer.setEnabled(false)
         depthProvider.stop()
@@ -1043,6 +1077,7 @@ class RecordingService : LifecycleService() {
             PackageManager.PERMISSION_GRANTED
 
     override fun onDestroy() {
+        frameTapJob?.cancel()
         telemetryCollector.stop()
         visionAnalyzer.setEnabled(false)
         depthProvider.stop()
@@ -1051,6 +1086,7 @@ class RecordingService : LifecycleService() {
         imageAnalysis?.clearAnalyzer()
         cameraInitializationJob?.cancel()
         visionAnalyzer.close()
+        liteRtObjectDetector.close()
         trafficModelRunner.close()
         depthProvider.close()
         super.onDestroy()
@@ -1083,6 +1119,7 @@ class RecordingService : LifecycleService() {
         private const val SAVE_WINDOW_NS = 60_000_000_000L
         private const val MANUAL_SAVE_EVENT = "MANUAL_SAVE"
         private const val TRAFFIC_STATUS_LOG_INTERVAL_NS = 5_000_000_000L
+        private const val FRAME_TAP_INTERVAL_MS = 250L
         private const val DEPTH_ASSOCIATION_WINDOW_NS = 1_000_000_000L
         private const val FRONT_APPROACH_TTC_SECONDS = 3f
         private const val FRONT_APPROACH_COOLDOWN_NS = 3_000_000_000L

@@ -18,7 +18,14 @@ data class VisionFrameResult(
     val objects: List<DetectedObjectObservation>,
     val inferenceMs: Long,
     val status: VisionStatus = VisionStatus.READY,
-)
+    val engine: String = ENGINE_MLKIT,
+    val statusMessage: String? = null,
+) {
+    companion object {
+        const val ENGINE_MLKIT = "mlkit"
+        const val ENGINE_LITERT = "litert"
+    }
+}
 
 enum class VisionStatus {
     READY,
@@ -33,4 +40,6 @@ data class VisionUiState(
     val objectCount: Int = 0,
     val lastInferenceMs: Long? = null,
     val lastElapsedNs: Long? = null,
+    val litertStatusMessage: String? = null,
+    val litertObjectCount: Int = 0,
 )

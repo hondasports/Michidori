@@ -459,7 +459,8 @@ private fun StatusSummary(state: RecordingUiState) {
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
         )
         Text(
-            text = "AI ${state.vision.statusMessage} · objects ${state.vision.objectCount} · ${state.vision.lastInferenceMs?.let { "${it}ms" } ?: "--"}",
+            text = "AI ${state.vision.statusMessage} · objects ${state.vision.objectCount} · ${state.vision.lastInferenceMs?.let { "${it}ms" } ?: "--"}" +
+                (state.vision.litertStatusMessage?.let { " · LiteRT $it n=${state.vision.litertObjectCount}" } ?: ""),
             color = MichidoriColors.textMuted,
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
