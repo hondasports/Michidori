@@ -431,9 +431,10 @@ private fun DetectionOverlay(vision: VisionUiState) {
     if (vision.objects.isEmpty() && vision.litertObjects.isEmpty()) return
     val labelPaint = remember {
         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = 26f
+            textSize = 44f
+            isFakeBoldText = true
             style = android.graphics.Paint.Style.FILL
-            setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+            setShadowLayer(5f, 1f, 2f, android.graphics.Color.BLACK)
         }
     }
     Canvas(modifier = Modifier.fillMaxSize()) {
@@ -452,13 +453,13 @@ private fun DetectionOverlay(vision: VisionUiState) {
                     color = color,
                     topLeft = Offset(left, top),
                     size = Size(boxWidth, boxHeight),
-                    style = Stroke(width = 3f),
+                    style = Stroke(width = 4.5f),
                 )
                 drawIntoCanvas { canvas ->
                     canvas.nativeCanvas.drawText(
                         "${detection.label} ${(detection.confidence * 100).toInt()}%",
                         left.coerceIn(0f, size.width - 1f),
-                        (top - 10f).coerceAtLeast(24f),
+                        (top - 12f).coerceAtLeast(44f),
                         labelPaint,
                     )
                 }

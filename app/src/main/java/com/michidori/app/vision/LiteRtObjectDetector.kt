@@ -164,7 +164,7 @@ class LiteRtObjectDetector(
     private fun decodeOutputs(frameWidth: Int, frameHeight: Int, elapsedNs: Long): List<DetectedObjectObservation> {
         val scores = outputBuffers.first().readFloat()
         val boxes = outputBuffers[1].readFloat()
-        return EfficientDetPostProcessor.decode(scores, boxes, scoreThreshold = 0.5f).map { detection ->
+        return EfficientDetPostProcessor.decode(scores, boxes, scoreThreshold = 0.3f).map { detection ->
             DetectedObjectObservation(
                 trackingId = null,
                 label = labelFor(detection.classIndex),
