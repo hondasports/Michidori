@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,10 +45,17 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -64,6 +72,8 @@ import com.michidori.app.recording.RecordingUiState
 import com.michidori.app.recording.ExportedSegment
 import com.michidori.app.playback.PlaybackActivity
 import com.michidori.app.ui.MichidoriTheme
+import com.michidori.app.vision.DetectedObjectObservation
+import com.michidori.app.vision.VisionUiState
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
@@ -350,6 +360,7 @@ private fun CameraPreview(
             },
             update = { service.attachPreview(it) },
         )
+        DetectionOverlay(state.vision)
         Column(
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -410,6 +421,51 @@ private fun CameraPreview(
                 fontSize = 17.sp,
             )
         }
+    }
+}
+
+private val LitertBoxColor = Color(0xFF4DD0E1)
+
+@Composable
+private fun DetectionOverlay(vision: VisionUiState) {
+    if (vision.objects.isEmpty() && vision.litertObjects.isEmpty()) return
+    val labelPaint = remember {
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 26f
+            style = android.graphics.Paint.Style.FILL
+            setShadowLayer(4f, 1f, 1f, android.graphics.Color.BLACK)
+        }
+    }
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        fun drawDetections(detections: List<DetectedObjectObservation>, color: Color) {
+            labelPaint.color = color.toArgb()
+            for (detection in detections) {
+                if (detection.frameWidth <= 0 || detection.frameHeight <= 0) continue
+                val scaleX = size.width / detection.frameWidth
+                val scaleY = size.height / detection.frameHeight
+                val left = detection.left * scaleX
+                val top = detection.top * scaleY
+                val boxWidth = (detection.right - detection.left) * scaleX
+                val boxHeight = (detection.bottom - detection.top) * scaleY
+                if (boxWidth <= 0f || boxHeight <= 0f) continue
+                drawRect(
+                    color = color,
+                    topLeft = Offset(left, top),
+                    size = Size(boxWidth, boxHeight),
+                    style = Stroke(width = 3f),
+                )
+                drawIntoCanvas { canvas ->
+                    canvas.nativeCanvas.drawText(
+                        "${detection.label} ${(detection.confidence * 100).toInt()}%",
+                        left.coerceIn(0f, size.width - 1f),
+                        (top - 10f).coerceAtLeast(24f),
+                        labelPaint,
+                    )
+                }
+            }
+        }
+        drawDetections(vision.objects, MichidoriColors.gps)
+        drawDetections(vision.litertObjects, LitertBoxColor)
     }
 }
 

@@ -399,6 +399,7 @@ class RecordingService : LifecycleService() {
                     vision = it.vision.copy(
                         litertStatusMessage = frame.statusMessage,
                         litertObjectCount = frame.objects.size,
+                        litertObjects = frame.objects,
                     ),
                 )
             }
@@ -410,6 +411,7 @@ class RecordingService : LifecycleService() {
                     objectCount = frame.objects.size,
                     lastInferenceMs = frame.inferenceMs,
                     lastElapsedNs = frame.elapsedNs,
+                    objects = frame.objects,
                 ),
             )
         }
@@ -968,7 +970,18 @@ class RecordingService : LifecycleService() {
         depthProvider.stop()
         ttcEstimator.reset()
         latestDepthSample = null
-        _uiState.update { it.copy(status = RecordingStatus.IDLE, elapsedMs = 0L) }
+        _uiState.update {
+            it.copy(
+                status = RecordingStatus.IDLE,
+                elapsedMs = 0L,
+                vision = it.vision.copy(
+                    objectCount = 0,
+                    litertObjectCount = 0,
+                    objects = emptyList(),
+                    litertObjects = emptyList(),
+                ),
+            )
+        }
         refreshSegmentState()
         updateNotification()
     }
@@ -1000,7 +1013,18 @@ class RecordingService : LifecycleService() {
         depthProvider.stop()
         ttcEstimator.reset()
         latestDepthSample = null
-        _uiState.update { it.copy(status = RecordingStatus.ERROR, lastError = message) }
+        _uiState.update {
+            it.copy(
+                status = RecordingStatus.ERROR,
+                lastError = message,
+                vision = it.vision.copy(
+                    objectCount = 0,
+                    litertObjectCount = 0,
+                    objects = emptyList(),
+                    litertObjects = emptyList(),
+                ),
+            )
+        }
         updateNotification()
     }
 

@@ -42,4 +42,6 @@ data class VisionUiState(
     val lastElapsedNs: Long? = null,
     val litertStatusMessage: String? = null,
     val litertObjectCount: Int = 0,
+    val objects: List<DetectedObjectObservation> = emptyList(),
+    val litertObjects: List<DetectedObjectObservation> = emptyList(),
 )
