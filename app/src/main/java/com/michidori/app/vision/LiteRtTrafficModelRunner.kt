@@ -1,10 +1,11 @@
 package com.michidori.app.vision
 
 import android.content.Context
-import java.io.FileInputStream
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
-import org.tensorflow.lite.Interpreter
+import com.google.ai.edge.litert.Accelerator
+import com.google.ai.edge.litert.CompiledModel
+import com.google.ai.edge.litert.Environment
+import com.google.ai.edge.litert.TensorBuffer
+import java.io.FileNotFoundException
 
 enum class TrafficModelStatus {
     READY,
@@ -23,7 +24,12 @@ class LiteRtTrafficModelRunner(
     context: Context,
     private val modelAssetName: String = DEFAULT_MODEL_ASSET,
 ) : AutoCloseable {
-    private var interpreter: Interpreter? = null
+    private var environment: Environment? = null
+    private var model: CompiledModel? = null
+    private var inputBuffers: List<TensorBuffer> = emptyList()
+    private var outputBuffers: List<TensorBuffer> = emptyList()
+    var activeAccelerator: Accelerator? = null
+        private set
     var status: TrafficModelStatus = TrafficModelStatus.MODEL_MISSING
         private set
     var statusMessage: String = "LiteRT traffic modelが未搭載"
@@ -31,12 +37,11 @@ class LiteRtTrafficModelRunner(
 
     init {
         runCatching {
-            interpreter = Interpreter(loadModelFile(context, modelAssetName))
-            status = TrafficModelStatus.READY
-            statusMessage = "LiteRT traffic model"
+            context.assets.open(modelAssetName).use { }
+            createAcceleratedModel(context)
         }.onFailure { failure ->
-            interpreter = null
-            status = if (failure is java.io.FileNotFoundException) {
+            release()
+            status = if (failure is FileNotFoundException) {
                 TrafficModelStatus.MODEL_MISSING
             } else {
                 TrafficModelStatus.ERROR
@@ -55,11 +60,11 @@ class LiteRtTrafficModelRunner(
      * capture or storage; shape/inference failures remain degraded.
      */
     fun infer(features: FloatArray, elapsedNs: Long): List<TrafficPrediction> {
-        val activeInterpreter = interpreter ?: return emptyList()
+        val activeModel = model ?: return emptyList()
         return runCatching {
-            val scores = Array(1) { FloatArray(4) }
-            activeInterpreter.run(arrayOf(features), scores)
-            scores[0].mapIndexed { index, score ->
+            inputBuffers.first().writeFloat(features)
+            activeModel.run(inputBuffers, outputBuffers)
+            outputBuffers.first().readFloat().mapIndexed { index, score ->
                 TrafficPrediction(
                     label = TRAFFIC_LABELS.getOrElse(index) { "class_$index" },
                     confidence = score.coerceIn(0f, 1f),
@@ -74,24 +79,59 @@ class LiteRtTrafficModelRunner(
     }
 
     override fun close() {
-        interpreter?.close()
-        interpreter = null
+        release()
     }
 
-    private fun loadModelFile(context: Context, assetName: String): MappedByteBuffer {
-        val descriptor = context.assets.openFd(assetName)
-        FileInputStream(descriptor.fileDescriptor).use { input ->
-            return input.channel.map(
-                FileChannel.MapMode.READ_ONLY,
-                descriptor.startOffset,
-                descriptor.declaredLength,
-            )
+    private fun createAcceleratedModel(context: Context) {
+        val env = Environment.create().also { environment = it }
+        val available = env.getAvailableAccelerators()
+        var lastFailure: Throwable? = null
+        for (accelerator in ACCELERATOR_PREFERENCE) {
+            if (accelerator != Accelerator.CPU && accelerator !in available) continue
+            runCatching { compileFor(context, accelerator) }
+                .onSuccess { candidate ->
+                    model = candidate
+                    activeAccelerator = accelerator
+                    status = TrafficModelStatus.READY
+                    statusMessage = "LiteRT traffic model ($accelerator)"
+                }
+                .onFailure { lastFailure = it }
+            if (model != null) return
         }
+        throw lastFailure ?: IllegalStateException("No LiteRT accelerator available")
+    }
+
+    private fun compileFor(context: Context, accelerator: Accelerator): CompiledModel {
+        val candidate = CompiledModel.create(
+            context.assets,
+            modelAssetName,
+            CompiledModel.Options(accelerator),
+        )
+        try {
+            inputBuffers = candidate.createInputBuffers()
+            outputBuffers = candidate.createOutputBuffers()
+            return candidate
+        } catch (failure: Throwable) {
+            runCatching { candidate.close() }
+            throw failure
+        }
+    }
+
+    private fun release() {
+        inputBuffers.forEach { runCatching { it.close() } }
+        outputBuffers.forEach { runCatching { it.close() } }
+        inputBuffers = emptyList()
+        outputBuffers = emptyList()
+        runCatching { model?.close() }
+        model = null
+        runCatching { environment?.close() }
+        environment = null
     }
 
     companion object {
         const val DEFAULT_MODEL_ASSET = "traffic_model.tflite"
         private const val MIN_CONFIDENCE = 0.35f
+        private val ACCELERATOR_PREFERENCE = listOf(Accelerator.NPU, Accelerator.GPU, Accelerator.CPU)
         private val TRAFFIC_LABELS = listOf("vehicle", "pedestrian", "cyclist", "traffic_signal")
     }
 }
