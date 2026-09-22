@@ -2,6 +2,7 @@ package com.michidori.app.vision
 
 import android.content.Context
 import com.google.ai.edge.litert.Accelerator
+import com.google.ai.edge.litert.BuiltinNpuAcceleratorProvider
 import com.google.ai.edge.litert.CompiledModel
 import com.google.ai.edge.litert.Environment
 import com.google.ai.edge.litert.TensorBuffer
@@ -83,7 +84,7 @@ class LiteRtTrafficModelRunner(
     }
 
     private fun createAcceleratedModel(context: Context) {
-        val env = Environment.create().also { environment = it }
+        val env = Environment.create(BuiltinNpuAcceleratorProvider(context)).also { environment = it }
         val available = env.getAvailableAccelerators()
         var lastFailure: Throwable? = null
         for (accelerator in ACCELERATOR_PREFERENCE) {
