@@ -244,25 +244,25 @@ class LiteRtObjectDetector(
         private val ACCELERATOR_PREFERENCE = listOf(Accelerator.NPU, Accelerator.GPU, Accelerator.CPU)
 
         /**
-         * COCO category names indexed by (categoryId - 1). EfficientDet-Lite0
-         * emits indices 0..89 which map to COCO ids 1..90; unused ids are
-         * marked "other" and never fire.
+         * COCO category names (Japanese) indexed by (categoryId - 1).
+         * EfficientDet-Lite0 emits indices 0..89 which map to COCO ids 1..90;
+         * unused ids are marked "other" and never fire.
          */
         private val COCO_LABELS = arrayOf(
-            "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-            "truck", "boat", "traffic light", "fire hydrant", "other", "stop sign",
-            "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-            "elephant", "bear", "zebra", "giraffe", "other", "backpack", "umbrella",
-            "other", "other", "handbag", "tie", "suitcase", "frisbee", "skis",
-            "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
-            "skateboard", "surfboard", "tennis racket", "bottle", "other",
-            "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana",
-            "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
-            "donut", "cake", "chair", "couch", "potted plant", "bed", "other",
-            "dining table", "other", "other", "toilet", "other", "tv", "laptop",
-            "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-            "toaster", "sink", "refrigerator", "other", "book", "clock", "vase",
-            "scissors", "teddy bear", "hair drier", "toothbrush",
+            "人", "自転車", "車", "バイク", "飛行機", "バス", "電車",
+            "トラック", "ボート", "信号", "消火栓", "other", "一時停止",
+            "パーキングメーター", "ベンチ", "鳥", "猫", "犬", "馬", "羊", "牛",
+            "象", "熊", "しまうま", "キリン", "other", "リュック", "傘",
+            "other", "other", "ハンドバッグ", "ネクタイ", "スーツケース", "フリスビー", "スキー",
+            "スノーボード", "ボール", "凧", "バット", "グローブ",
+            "スケートボード", "サーフボード", "テニスラケット", "ボトル", "other",
+            "ワイングラス", "コップ", "フォーク", "ナイフ", "スプーン", "ボウル", "バナナ",
+            "りんご", "サンドイッチ", "みかん", "ブロッコリー", "にんじん", "ホットドッグ", "ピザ",
+            "ドーナツ", "ケーキ", "椅子", "ソファ", "鉢植え", "ベッド", "other",
+            "テーブル", "other", "other", "トイレ", "other", "テレビ", "ノートPC",
+            "マウス", "リモコン", "キーボード", "スマホ", "電子レンジ", "オーブン",
+            "トースター", "流し台", "冷蔵庫", "other", "本", "時計", "花瓶",
+            "はさみ", "ぬいぐるみ", "ドライヤー", "歯ブラシ",
         )
     }
 }
