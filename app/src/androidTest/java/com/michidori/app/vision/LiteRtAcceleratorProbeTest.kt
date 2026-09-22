@@ -77,6 +77,14 @@ class LiteRtAcceleratorProbeTest {
                 }
                 activeModel.run(inputs, outputs)
             }.onFailure { Log.w(TAG, "run failed", it) }
+            runCatching {
+                val scores = outputs[0].readFloat()
+                val top = scores.sortedDescending().take(10)
+                Log.i(
+                    TAG,
+                    "score stats min=${scores.minOrNull()} max=${scores.maxOrNull()} top10=$top",
+                )
+            }
             outputs.forEachIndexed { index, buffer ->
                 runCatching { Log.i(TAG, "out[$index] float32 elements=${buffer.readFloat().size}") }
                     .onFailure { Log.i(TAG, "out[$index] float32 read failed: ${it.message}") }

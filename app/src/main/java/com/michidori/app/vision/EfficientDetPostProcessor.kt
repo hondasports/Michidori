@@ -44,7 +44,14 @@ object EfficientDetPostProcessor {
         require(classLogits.size >= NUM_ANCHORS * NUM_CLASSES) { "unexpected logits size" }
         require(boxDeltas.size >= NUM_ANCHORS * 4) { "unexpected box size" }
 
-        val candidates = mutableListOf<Detection>()
+        // EfficientDet exports differ: raw heads emit logits (need sigmoid)
+        // while quantized exports like the bundled MediaPipe int8 model emit
+        // probabilities already. Detect by range: any score outside [0,1]
+        // means the tensor holds logits.
+        val bestClassPerAnchor = IntArray(NUM_ANCHORS)
+        val bestScorePerAnchor = FloatArray(NUM_ANCHORS)
+        var minScore = Float.POSITIVE_INFINITY
+        var maxScore = Float.NEGATIVE_INFINITY
         for (anchorIndex in 0 until NUM_ANCHORS) {
             var bestClass = -1
             var bestLogit = Float.NEGATIVE_INFINITY
@@ -56,7 +63,17 @@ object EfficientDetPostProcessor {
                     bestClass = clazz
                 }
             }
-            val score = sigmoid(bestLogit)
+            bestClassPerAnchor[anchorIndex] = bestClass
+            bestScorePerAnchor[anchorIndex] = bestLogit
+            if (bestLogit < minScore) minScore = bestLogit
+            if (bestLogit > maxScore) maxScore = bestLogit
+        }
+        val applySigmoid = minScore < 0f || maxScore > 1f
+
+        val candidates = mutableListOf<Detection>()
+        for (anchorIndex in 0 until NUM_ANCHORS) {
+            val raw = bestScorePerAnchor[anchorIndex]
+            val score = if (applySigmoid) sigmoid(raw) else raw
             if (score < scoreThreshold) continue
 
             val anchorBase = anchorIndex * 4
@@ -70,7 +87,7 @@ object EfficientDetPostProcessor {
             val h = exp(boxDeltas[deltaBase + 2].toDouble()).toFloat() * anchorH
             val w = exp(boxDeltas[deltaBase + 3].toDouble()).toFloat() * anchorW
             candidates += Detection(
-                classIndex = bestClass,
+                classIndex = bestClassPerAnchor[anchorIndex],
                 score = score,
                 yMin = (cy - h / 2f) / IMAGE_SIZE,
                 xMin = (cx - w / 2f) / IMAGE_SIZE,

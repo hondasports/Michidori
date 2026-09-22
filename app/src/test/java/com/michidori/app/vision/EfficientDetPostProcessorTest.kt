@@ -64,6 +64,22 @@ class EfficientDetPostProcessorTest {
         assertEquals(2, detections[0].classIndex)
     }
 
+    @Test
+    fun treatsAllUnitRangeScoresAsProbabilities() {
+        // Quantized exports emit probabilities directly (all within [0,1]);
+        // they must not be inflated by an extra sigmoid.
+        val scores = FloatArray(EfficientDetPostProcessor.NUM_ANCHORS * EfficientDetPostProcessor.NUM_CLASSES)
+        val boxes = FloatArray(EfficientDetPostProcessor.NUM_ANCHORS * 4)
+        scores[0 * EfficientDetPostProcessor.NUM_CLASSES + 3] = 0.55f
+        scores[1 * EfficientDetPostProcessor.NUM_CLASSES + 0] = 0.2f
+
+        val detections = EfficientDetPostProcessor.decode(scores, boxes, scoreThreshold = 0.5f)
+
+        assertEquals(1, detections.size)
+        assertEquals(3, detections[0].classIndex)
+        assertEquals(0.55f, detections[0].score, 1e-4f)
+    }
+
     private fun logit(probability: Float): Float =
         ln((probability / (1f - probability)).toDouble()).toFloat()
 }

@@ -139,6 +139,14 @@ class VisionAnalyzer(
             }
             .addOnFailureListener {
                 onStatus(VisionStatus.DEGRADED, "ML Kit推論が一時的に失敗")
+                onResult(
+                    VisionFrameResult(
+                        elapsedNs = elapsedNs,
+                        objects = emptyList(),
+                        inferenceMs = (SystemClock.elapsedRealtimeNanos() - startedNs) / NANOS_PER_MILLI,
+                        status = VisionStatus.DEGRADED,
+                    ),
+                )
             }
             .addOnCompleteListener {
                 onComplete()

@@ -464,7 +464,12 @@ private fun DetectionOverlay(vision: VisionUiState) {
                 }
             }
         }
-        drawDetections(vision.objects, MichidoriColors.gps)
+        // ML Kit STREAM_MODE emits unclassified blobs ("unknown" at 0%) that
+        // are useful for tracking/telemetry but only add noise on screen.
+        drawDetections(
+            vision.objects.filter { it.confidence > 0f },
+            MichidoriColors.gps,
+        )
         drawDetections(vision.litertObjects, LitertBoxColor)
     }
 }

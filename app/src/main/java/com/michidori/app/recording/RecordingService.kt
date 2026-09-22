@@ -399,7 +399,11 @@ class RecordingService : LifecycleService() {
                     vision = it.vision.copy(
                         litertStatusMessage = frame.statusMessage,
                         litertObjectCount = frame.objects.size,
-                        litertObjects = frame.objects,
+                        litertObjects = if (frame.status == VisionStatus.ERROR) {
+                            emptyList()
+                        } else {
+                            frame.objects
+                        },
                     ),
                 )
             }
