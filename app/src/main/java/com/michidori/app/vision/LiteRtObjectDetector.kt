@@ -180,13 +180,8 @@ class LiteRtObjectDetector(
         }
     }
 
-    private fun labelFor(classIndex: Int): String = when (classIndex) {
-        0 -> "pedestrian"          // COCO 1: person
-        1, 3 -> "cyclist"          // COCO 2: bicycle, 4: motorcycle
-        2, 5, 7 -> "vehicle"       // COCO 3: car, 6: bus, 8: truck
-        9, 12 -> "traffic_signal"  // COCO 10: traffic light, 13: stop sign
-        else -> "object_${classIndex + 1}"
-    }
+    private fun labelFor(classIndex: Int): String =
+        COCO_LABELS.getOrElse(classIndex) { "object_${classIndex + 1}" }
 
     private fun createAcceleratedModel(context: Context) {
         val env = Environment.create(BuiltinNpuAcceleratorProvider(context)).also { environment = it }
@@ -247,5 +242,27 @@ class LiteRtObjectDetector(
         private const val NANOS_PER_MILLI = 1_000_000L
         private const val HANG_THRESHOLD_NS = 10_000_000_000L
         private val ACCELERATOR_PREFERENCE = listOf(Accelerator.NPU, Accelerator.GPU, Accelerator.CPU)
+
+        /**
+         * COCO category names indexed by (categoryId - 1). EfficientDet-Lite0
+         * emits indices 0..89 which map to COCO ids 1..90; unused ids are
+         * marked "other" and never fire.
+         */
+        private val COCO_LABELS = arrayOf(
+            "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+            "truck", "boat", "traffic light", "fire hydrant", "other", "stop sign",
+            "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+            "elephant", "bear", "zebra", "giraffe", "other", "backpack", "umbrella",
+            "other", "other", "handbag", "tie", "suitcase", "frisbee", "skis",
+            "snowboard", "sports ball", "kite", "baseball bat", "baseball glove",
+            "skateboard", "surfboard", "tennis racket", "bottle", "other",
+            "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana",
+            "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza",
+            "donut", "cake", "chair", "couch", "potted plant", "bed", "other",
+            "dining table", "other", "other", "toilet", "other", "tv", "laptop",
+            "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
+            "toaster", "sink", "refrigerator", "other", "book", "clock", "vase",
+            "scissors", "teddy bear", "hair drier", "toothbrush",
+        )
     }
 }
