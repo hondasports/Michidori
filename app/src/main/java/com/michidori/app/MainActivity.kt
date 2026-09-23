@@ -14,8 +14,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,11 +32,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -46,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -494,6 +501,7 @@ private fun StatusPill(label: String, color: Color) {
 
 @Composable
 private fun StatusSummary(state: RecordingUiState) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Card(
         colors = CardDefaults.cardColors(containerColor = MichidoriColors.surface),
         shape = RoundedCornerShape(16.dp),
@@ -501,48 +509,59 @@ private fun StatusSummary(state: RecordingUiState) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable { expanded = !expanded }
                 .padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             SummaryItem("SEGMENT", "${state.segmentCount}")
             SummaryItem("PROTECTED", "${state.protectedSegmentCount}")
             SummaryItem("TELEMETRY", "${state.telemetrySampleCount}")
-        }
-        Text(
-            text = "${state.capture.selection.appliedQuality.displayName} · ${state.capture.selection.appliedLens.displayName} · ${codecLabel(state.capture.selection.codecMimeType)}",
-            color = MichidoriColors.textSecondary,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
-        )
-        Text(
-            text = deviceStatusLabel(state),
-            color = MichidoriColors.textMuted,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
-        )
-        Text(
-            text = "AI ${state.vision.statusMessage} · objects ${state.vision.objectCount} · ${state.vision.lastInferenceMs?.let { "${it}ms" } ?: "--"}" +
-                (state.vision.litertStatusMessage?.let { " · LiteRT $it n=${state.vision.litertObjectCount}" } ?: ""),
-            color = MichidoriColors.textMuted,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
-        )
-        Text(
-            text = "DEPTH ${state.depth.statusMessage} · ${state.depth.lastDistanceMeters?.let { String.format(Locale.US, "%.1fm", it) } ?: "--"} · LiteRT ${state.trafficModelStatus}",
-            color = MichidoriColors.textMuted,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
-        )
-        state.lastEventType?.let { eventType ->
-            Text(
-                text = "EVENT $eventType",
-                color = MichidoriColors.warning,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+            Icon(
+                imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "状態の詳細を閉じる" else "状態の詳細を開く",
+                tint = MichidoriColors.textMuted,
             )
         }
-        Spacer(Modifier.height(10.dp))
+        AnimatedVisibility(visible = expanded) {
+            Column {
+                Text(
+                    text = "${state.capture.selection.appliedQuality.displayName} · ${state.capture.selection.appliedLens.displayName} · ${codecLabel(state.capture.selection.codecMimeType)}",
+                    color = MichidoriColors.textSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+                )
+                Text(
+                    text = deviceStatusLabel(state),
+                    color = MichidoriColors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+                )
+                Text(
+                    text = "AI ${state.vision.statusMessage} · objects ${state.vision.objectCount} · ${state.vision.lastInferenceMs?.let { "${it}ms" } ?: "--"}" +
+                        (state.vision.litertStatusMessage?.let { " · LiteRT $it n=${state.vision.litertObjectCount}" } ?: ""),
+                    color = MichidoriColors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+                )
+                Text(
+                    text = "DEPTH ${state.depth.statusMessage} · ${state.depth.lastDistanceMeters?.let { String.format(Locale.US, "%.1fm", it) } ?: "--"} · LiteRT ${state.trafficModelStatus}",
+                    color = MichidoriColors.textMuted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 0.dp),
+                )
+                state.lastEventType?.let { eventType ->
+                    Text(
+                        text = "EVENT $eventType",
+                        color = MichidoriColors.warning,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
+        }
     }
 }
 
@@ -644,65 +663,94 @@ private fun EventHistory(
     onPlaySegment: (RecordingSegment) -> Unit,
     onShareSegment: (RecordingSegment) -> Unit,
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(176.dp),
+            .then(if (expanded) Modifier.height(176.dp) else Modifier),
         colors = CardDefaults.cardColors(containerColor = MichidoriColors.surface),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("イベント履歴", color = MichidoriColors.textPrimary, fontWeight = FontWeight.SemiBold)
-            if (state.events.isEmpty()) {
-                Text("まだイベント候補は無いで", color = MichidoriColors.textMuted, fontSize = 12.sp)
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(state.events.takeLast(MAX_VISIBLE_EVENTS).asReversed(), key = { it.id }) { event ->
-                        val segment = state.segments.lastOrNull { it.overlaps(event.elapsedNs, event.elapsedNs) }
-                        val explanation = state.eventExplanations[event.id]
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.Top,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp),
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${event.type} · ${event.severity} · ${(event.confidence * 100).toInt()}%",
-                                    color = MichidoriColors.textSecondary,
-                                    fontSize = 12.sp,
-                                )
-                                event.details?.takeIf(String::isNotBlank)?.let { details ->
-                                    Text(details, color = MichidoriColors.textMuted, fontSize = 10.sp, maxLines = 1)
-                                }
-                                explanation?.let { memo ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "イベント履歴",
+                    color = MichidoriColors.textPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state.events.isNotEmpty()) {
+                    Text(
+                        text = "${state.events.size}件",
+                        color = MichidoriColors.textMuted,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    contentDescription = if (expanded) "イベント履歴を閉じる" else "イベント履歴を開く",
+                    tint = MichidoriColors.textMuted,
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                if (state.events.isEmpty()) {
+                    Text("まだイベント候補は無いで", color = MichidoriColors.textMuted, fontSize = 12.sp)
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        items(state.events.takeLast(MAX_VISIBLE_EVENTS).asReversed(), key = { it.id }) { event ->
+                            val segment = state.segments.lastOrNull { it.overlaps(event.elapsedNs, event.elapsedNs) }
+                            val explanation = state.eventExplanations[event.id]
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.Top,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = "${memo.source.name}: ${memo.text}",
-                                        color = MichidoriColors.textMuted,
-                                        fontSize = 10.sp,
-                                        maxLines = 2,
+                                        text = "${event.type} · ${event.severity} · ${(event.confidence * 100).toInt()}%",
+                                        color = MichidoriColors.textSecondary,
+                                        fontSize = 12.sp,
                                     )
+                                    event.details?.takeIf(String::isNotBlank)?.let { details ->
+                                        Text(details, color = MichidoriColors.textMuted, fontSize = 10.sp, maxLines = 1)
+                                    }
+                                    explanation?.let { memo ->
+                                        Text(
+                                            text = "${memo.source.name}: ${memo.text}",
+                                            color = MichidoriColors.textMuted,
+                                            fontSize = 10.sp,
+                                            maxLines = 2,
+                                        )
+                                    }
                                 }
-                            }
-                            OutlinedButton(
-                                onClick = { onExplainEvent(event.id) },
-                                enabled = state.explainingEventId == null,
-                                modifier = Modifier.height(34.dp),
-                            ) {
-                                Text(if (state.explainingEventId == event.id) "…" else "説明", fontSize = 10.sp)
-                            }
-                            OutlinedButton(
-                                onClick = { segment?.let(onPlaySegment) },
-                                enabled = segment != null,
-                                modifier = Modifier.height(34.dp),
-                            ) {
-                                Text("再生", fontSize = 10.sp)
-                            }
-                            OutlinedButton(
-                                onClick = { segment?.let(onShareSegment) },
-                                enabled = segment != null,
-                                modifier = Modifier.height(34.dp),
-                            ) {
-                                Text("共有", fontSize = 10.sp)
+                                OutlinedButton(
+                                    onClick = { onExplainEvent(event.id) },
+                                    enabled = state.explainingEventId == null,
+                                    modifier = Modifier.height(34.dp),
+                                ) {
+                                    Text(if (state.explainingEventId == event.id) "…" else "説明", fontSize = 10.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { segment?.let(onPlaySegment) },
+                                    enabled = segment != null,
+                                    modifier = Modifier.height(34.dp),
+                                ) {
+                                    Text("再生", fontSize = 10.sp)
+                                }
+                                OutlinedButton(
+                                    onClick = { segment?.let(onShareSegment) },
+                                    enabled = segment != null,
+                                    modifier = Modifier.height(34.dp),
+                                ) {
+                                    Text("共有", fontSize = 10.sp)
+                                }
                             }
                         }
                     }
